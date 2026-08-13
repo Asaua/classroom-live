@@ -6,17 +6,21 @@
   const params = new URLSearchParams(location.search);
   const tokenFromUrl = params.get("token");
   const pinFromUrl = params.get("pin");
-  if (tokenFromUrl) sessionStorage.setItem("classroom-live:admin", tokenFromUrl);
+  // 검은 창을 없앤 뒤로는 토큰이 담긴 주소를 다시 볼 곳이 없다. 교수님이 탭을 닫아도
+  // localhost:5050/host 로 돌아올 수 있도록 localStorage에 남긴다.
+  // 토큰은 서버를 켤 때마다 새로 만들어지므로 남은 값은 다음 실행에서 그냥 무효가 된다.
+  if (tokenFromUrl) localStorage.setItem("classroom-live:admin", tokenFromUrl);
   if (pinFromUrl) sessionStorage.setItem("classroom-live:pin", pinFromUrl);
   if (tokenFromUrl || pinFromUrl) history.replaceState(null, "", location.pathname);
 
-  const adminToken = sessionStorage.getItem("classroom-live:admin") || "";
+  const adminToken = localStorage.getItem("classroom-live:admin") || "";
   let pin = sessionStorage.getItem("classroom-live:pin") || "";
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
   let selectedName = "";
   let latestHostState = null;
   let requestRunning = false;
   let blockedUntil = 0;
+  let shuttingDown = false;
 
   const FONT_STEPS = [11, 12.5, 14, 16, 18, 21, 24];
   let fontIndex = clampFontIndex(Number(localStorage.getItem("classroom-live:font")));
@@ -41,6 +45,12 @@
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
+
+  // 한 번 읽으면 끝인 안내다. 교수 화면에는 애초에 필요 없고,
+  // 학생도 닫거나 파일을 직접 골라보면 다시 뜨지 않는다.
+  if (!isHost && localStorage.getItem("classroom-live:note-read") !== "1")
+    $("followNote").hidden = false;
+  $("dismissNote").addEventListener("click", dismissNote);
   applyWrap();
   applyFont();
 
@@ -86,6 +96,42 @@
     button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
     setTimeout(() => { button.textContent = "학생 주소 복사"; }, 1200);
   });
+  $("toggleShare").addEventListener("click", async () => {
+    const button = $("toggleShare");
+    const enabled = button.dataset.shared !== "1";
+    button.disabled = true;
+    try {
+      const response = await fetch("/api/host/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+        body: JSON.stringify({ enabled }),
+      });
+      notify(response.ok
+        ? (enabled ? "공유했습니다." : "공유를 해제했습니다.")
+        : "요청에 실패했습니다.");
+    } catch {
+      notify("Visual Studio 확장에 연결하지 못했습니다.");
+    } finally {
+      button.disabled = false;
+    }
+    await refresh();
+  });
+
+  $("shutdown").addEventListener("click", async () => {
+    const student = latestHostState?.classroom?.viewers ?? 0;
+    const warning = student > 0 ? ` 지금 ${student}명이 보고 있습니다.` : "";
+    if (!await confirmPopup(`수업을 끝내고 서버를 종료할까요?${warning}`, "종료")) return;
+
+    shuttingDown = true;
+    try {
+      await fetch("/api/host/shutdown", { method: "POST", headers: { "X-Admin-Token": adminToken } });
+    } catch { /* 종료 중에 연결이 끊기는 것은 정상이다. */ }
+    // 자동으로 사라지면 안 된다. 종료됐다는 사실이 화면에 남아 있어야 한다.
+    popup("수업을 종료했습니다. 이 탭은 닫으셔도 됩니다.", [{ label: "확인" }]);
+    setConnection("종료됨", "paused");
+    setText($("hostStatus"), "종료됨");
+  });
+
   $("allowFirewall").addEventListener("click", async () => {
     const button = $("allowFirewall");
     button.disabled = true;
@@ -101,6 +147,11 @@
       button.disabled = false;
     }
   });
+
+  function dismissNote() {
+    $("followNote").hidden = true;
+    localStorage.setItem("classroom-live:note-read", "1");
+  }
 
   function openFiles(open) {
     $("filePanel").classList.toggle("is-open", open);
@@ -120,13 +171,45 @@
     if (element.getAttribute("title") !== value) element.setAttribute("title", value);
   }
 
-  function notify(message) {
+  // 하단 팝업 공통 처리. 알림과 확인을 같은 자리에서 보여준다.
+  // actions가 없으면 잠시 뒤 저절로 사라지고, 있으면 사용자가 고를 때까지 남는다.
+  function popup(message, actions) {
     const notice = $("notice");
-    notice.textContent = message;
-    notice.hidden = false;
     clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => { notice.hidden = true; }, 3200);
+
+    const text = document.createElement("span");
+    text.className = "notice-text";
+    text.textContent = message;
+    notice.replaceChildren(text);
+
+    if (actions?.length) {
+      const group = document.createElement("span");
+      group.className = "notice-actions";
+      for (const action of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `notice-button${action.danger ? " is-danger" : ""}`;
+        button.textContent = action.label;
+        button.addEventListener("click", () => {
+          notice.hidden = true;
+          action.select?.();
+        });
+        group.append(button);
+      }
+      notice.append(group);
+    } else {
+      noticeTimer = setTimeout(() => { notice.hidden = true; }, 3200);
+    }
+
+    notice.hidden = false;
   }
+
+  const notify = (message) => popup(message, null);
+
+  const confirmPopup = (message, label) => new Promise((resolve) => popup(message, [
+    { label: "취소", select: () => resolve(false) },
+    { label, danger: true, select: () => resolve(true) },
+  ]));
 
   // 학생은 http로 접속하므로 navigator.clipboard가 없다. crypto.randomUUID와 같은 함정이다.
   async function copyText(text) {
@@ -195,7 +278,7 @@
   }
 
   async function refresh() {
-    if (requestRunning) return;
+    if (requestRunning || shuttingDown) return;
     // 틀린 PIN을 들고 0.75초마다 계속 두드리면 서버의 시도 제한에 스스로 걸린다.
     if (!isHost && !pin) return;
     if (Date.now() < blockedUntil) return;
@@ -522,6 +605,8 @@ while with yield None True False
       localStorage.setItem("classroom-live:selected-file", selectedId);
       setFollowing(false);
       openFiles(false);
+      // 직접 골랐다는 건 안내를 이해했다는 뜻이다.
+      dismissNote();
       void refresh();
     });
 
@@ -581,6 +666,20 @@ while with yield None True False
     setText($("toggleBroadcast"), payload.broadcasting ? "화면 고정" : "방송 시작");
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
+
+    // Visual Studio로 돌아가 단축키를 누르지 않아도 여기서 공유를 켜고 끌 수 있다.
+    const button = $("toggleShare");
+    const current = payload.currentFileName;
+    button.hidden = !current;
+    if (!current) return;
+
+    const shared = Boolean(payload.currentFileShared);
+    setText(button, shared ? `${current} 공유 해제` : `${current} 공유`);
+    setTitle(button, shared
+      ? "학생 화면에서 이 파일을 내립니다 (Ctrl+Alt+L과 같음)"
+      : "Visual Studio에서 열려 있는 이 파일을 공유합니다 (Ctrl+Alt+L과 같음)");
+    button.classList.toggle("is-active", shared);
+    button.dataset.shared = shared ? "1" : "0";
   }
 
   function setConnection(text, kind) {

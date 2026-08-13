@@ -3,6 +3,9 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>ClassroomLive</AssemblyName>
+    <!-- 더블클릭했을 때 검은 콘솔 창이 뜨지 않게 한다. 터미널에서 실행하면
+         HostConsole.TryAttach()가 부모 콘솔에 붙어 출력이 그대로 보인다. -->
+    <OutputType>WinExe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>

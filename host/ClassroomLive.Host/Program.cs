@@ -2,9 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Text;
 
-Console.OutputEncoding = Encoding.UTF8;
+// 터미널에서 실행됐으면 그 콘솔에 붙는다. 더블클릭이면 창 없이 조용히 시작한다.
+HostConsole.TryAttach();
 
 if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
 {
@@ -19,12 +19,15 @@ var publishedRoot = Directory.Exists(Path.Combine(AppContext.BaseDirectory, "www
 var webRoot = Path.Combine(publishedRoot, "wwwroot");
 
 // wwwroot가 없으면 정적 파일 미들웨어가 조용히 404를 뱉고 /host는 500으로 죽는다.
-// 원인을 알 수 없는 빈 화면 대신 여기서 분명하게 멈춘다.
+// 창이 없으면 아무 표시도 없이 끝나므로 반드시 알린다.
 if (!File.Exists(Path.Combine(webRoot, "index.html")))
 {
-    Console.Error.WriteLine("화면 파일(wwwroot/index.html)을 찾지 못했습니다.");
-    Console.Error.WriteLine($"  확인한 경로: {webRoot}");
-    Console.Error.WriteLine("  'dotnet publish -c Release' 로 만든 폴더에서 실행해주세요.");
+    HostConsole.Error($"""
+        화면 파일(wwwroot/index.html)을 찾지 못했습니다.
+
+        확인한 경로: {webRoot}
+        'dotnet publish -c Release' 로 만든 폴더에서 실행해주세요.
+        """);
     return 1;
 }
 
@@ -77,9 +80,13 @@ app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
 });
 
 app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
-    session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault())
-        ? Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)))
-        : Results.Unauthorized());
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    session.RecordHostPoll();
+    return Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)));
+});
 
 app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest request, ClassroomSession session) =>
 {
@@ -87,6 +94,31 @@ app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest reques
         return Results.Unauthorized();
 
     session.SetBroadcasting(request.Enabled);
+    return Results.Ok();
+});
+
+app.MapPost("/api/host/share", (HttpContext context, BroadcastRequest request, ClassroomSession session) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    // 확장이 다음 폴링에서 가져간다. 교수님이 Visual Studio로 돌아가지 않아도 된다.
+    session.RequestShare(request.Enabled);
+    return Results.Ok();
+});
+
+app.MapPost("/api/host/shutdown", (HttpContext context, ClassroomSession session,
+    IHostApplicationLifetime lifetime) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    // 응답을 먼저 보내고 종료한다. 바로 멈추면 브라우저가 성공을 확인하지 못한다.
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(300);
+        lifetime.StopApplication();
+    });
     return Results.Ok();
 });
 
@@ -148,9 +180,11 @@ app.MapPost("/api/extension/update", (HttpContext context, ExtensionUpdateReques
 
     // 교수가 ×로 내린 파일이면 409로 알려준다. 확장이 이걸 받아 공유 목록을 정리하므로
     // 단축키를 두 번 눌러야 다시 공유되던 문제가 사라진다.
-    return session.ApplyExtensionUpdate(request) == ExtensionUpdateOutcome.Suppressed
-        ? Results.Conflict()
-        : Results.Ok();
+    if (session.ApplyExtensionUpdate(request) == ExtensionUpdateOutcome.Suppressed)
+        return Results.Conflict();
+
+    // 교수 화면에서 누른 "현재 파일 공유"를 응답에 실어 보낸다.
+    return Results.Ok(new { command = session.TakePendingCommand() });
 });
 
 app.MapDelete("/api/host/files/{id}", (HttpContext context, string id, ClassroomSession session) =>
@@ -166,6 +200,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     var session = app.Services.GetRequiredService<ClassroomSession>();
     var hostUrl = $"http://localhost:{port}/host?token={session.AdminToken}";
+    var studentUrls = GetStudentUrls(port, session.Pin);
 
     // 확장이 포트와 토큰을 찾을 수 있도록 남긴다. 이게 없으면 확장은 연결되지 않는다.
     try
@@ -174,29 +209,79 @@ app.Lifetime.ApplicationStarted.Register(() =>
     }
     catch (Exception exception)
     {
-        Console.Error.WriteLine($"확장 연결 정보를 저장하지 못했습니다: {exception.Message}");
-        Console.Error.WriteLine($"  경로: {HostHandshake.FilePath}");
+        HostConsole.Error($"""
+            Visual Studio 확장 연결 정보를 저장하지 못했습니다.
+            확장이 연결되지 않을 수 있습니다.
+
+            {exception.Message}
+            경로: {HostHandshake.FilePath}
+            """);
     }
 
     Console.WriteLine();
     Console.WriteLine("Classroom Live가 준비되었습니다.");
     Console.WriteLine($"교수 화면: {hostUrl}");
-    foreach (var url in GetStudentUrls(port, session.Pin))
-        Console.WriteLine($"학생 주소: {url}");
-    Console.WriteLine("종료하려면 Ctrl+C를 누르세요.");
+    foreach (var url in studentUrls) Console.WriteLine($"학생 주소: {url}");
     Console.WriteLine();
 
-    if (Environment.GetEnvironmentVariable("CLASSROOM_LIVE_NO_BROWSER") != "1")
-    {
-        try { Process.Start(new ProcessStartInfo(hostUrl) { UseShellExecute = true }); }
-        catch { /* 브라우저 자동 실행 실패는 서버 동작에 영향을 주지 않습니다. */ }
-    }
+    if (Environment.GetEnvironmentVariable("CLASSROOM_LIVE_NO_BROWSER") == "1") return;
 
+    try
+    {
+        using var browser = Process.Start(new ProcessStartInfo(hostUrl) { UseShellExecute = true });
+        if (browser is null) throw new InvalidOperationException("브라우저를 시작하지 못했습니다.");
+    }
+    catch
+    {
+        // 창을 없앴으므로 여기서 못 알리면 교수님은 주소를 볼 방법이 전혀 없다.
+        HostConsole.Info($"""
+            브라우저를 자동으로 열지 못했습니다.
+            아래 주소를 직접 열어주세요.
+
+            교수 화면:
+            {hostUrl}
+            """);
+    }
 });
 
 app.Lifetime.ApplicationStopping.Register(HostHandshake.Delete);
 
-await app.RunAsync();
+// 교수 화면을 닫고 잊어버려도 서버가 며칠씩 남아 있지 않게 한다.
+// 학생이 한 명이라도 보고 있으면 종료하지 않는다.
+var idleWatch = new Timer(_ =>
+{
+    var session = app.Services.GetRequiredService<ClassroomSession>();
+    if (session.IsIdle(TimeSpan.FromMinutes(30))) app.Lifetime.StopApplication();
+}, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+
+try
+{
+    await app.RunAsync();
+}
+catch (IOException exception)
+{
+    HostConsole.Error($"""
+        {port}번 포트를 사용할 수 없습니다.
+        다른 프로그램이 쓰고 있거나 Classroom Live가 이미 실행 중입니다.
+
+        {exception.Message}
+        """);
+    return 1;
+}
+catch (Exception exception)
+{
+    HostConsole.Error($"""
+        Classroom Live를 시작하지 못했습니다.
+
+        {exception.Message}
+        """);
+    return 1;
+}
+finally
+{
+    await idleWatch.DisposeAsync();
+}
+
 return 0;
 
 static string[] GetStudentUrls(int port, string pin)

@@ -101,8 +101,8 @@ namespace ClassroomLive.Extension
                 {
                     sharedFiles.Add(update.FilePath);
                     update.Action = "share";
-                    var status = await PostAsync(update);
-                    SetStatus(status == HttpStatusCode.OK
+                    var result = await PostAsync(update);
+                    SetStatus(result.Status == HttpStatusCode.OK
                         ? "Classroom Live: " + Path.GetFileName(update.FilePath) + " 공유 등록"
                         : "Classroom Live: 파일은 등록됨 · ClassroomLive.exe 실행 대기 중");
                 }
@@ -124,18 +124,47 @@ namespace ClassroomLive.Extension
                         Action = "heartbeat"
                     };
                     update.Action = isShared ? "sync" : "heartbeat";
-                    var status = await PostAsync(update);
+                    var result = await PostAsync(update);
                     // 교수 화면에서 ×로 내린 파일은 호스트가 409로 알려준다.
                     // 여기서 공유 목록을 맞춰야 Ctrl+Alt+L 한 번으로 다시 공유된다.
-                    if (status == HttpStatusCode.Conflict && path != null)
+                    if (result.Status == HttpStatusCode.Conflict && path != null)
                         sharedFiles.Remove(path);
-                    UpdateInterval(status.HasValue);
+                    UpdateInterval(result.Status.HasValue);
+
+                    // 교수 화면 버튼으로 내린 명령. Visual Studio로 돌아오지 않아도 동작한다.
+                    if (result.Command != null && path != null)
+                        await RunHostCommandAsync(result.Command, path);
                 }
                 finally
                 {
                     Interlocked.Exchange(ref syncRunning, 0);
                 }
             });
+        }
+
+        /// <summary>교수 화면 버튼이 보낸 공유/해제 명령을 단축키와 똑같이 처리한다.</summary>
+        private async Task RunHostCommandAsync(string command, string path)
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            if (command == "share" && !sharedFiles.Contains(path))
+            {
+                var update = CaptureActiveFile(includeContent: true);
+                if (update == null) return;
+                sharedFiles.Add(update.FilePath);
+                update.Action = "share";
+                await PostAsync(update);
+                SetStatus("Classroom Live: " + Path.GetFileName(path) + " 공유 등록 (교수 화면)");
+            }
+            else if (command == "unshare" && sharedFiles.Remove(path))
+            {
+                var update = CaptureActiveFile(includeContent: false);
+                if (update == null) return;
+                update.Action = "unshare";
+                update.Content = null;
+                await PostAsync(update);
+                SetStatus("Classroom Live: " + Path.GetFileName(path) + " 공유 해제 (교수 화면)");
+            }
         }
 
         private void UpdateInterval(bool reachedHost)
@@ -204,11 +233,11 @@ namespace ClassroomLive.Extension
             catch { }
         }
 
-        /// <summary>호스트에 전송한다. 호스트에 닿지 못하면 null을 돌려준다.</summary>
-        private static async Task<HttpStatusCode?> PostAsync(ExtensionUpdate update)
+        /// <summary>호스트에 전송한다. 호스트에 닿지 못하면 Status가 null이다.</summary>
+        private static async Task<PostResult> PostAsync(ExtensionUpdate update)
         {
             var handshake = HostHandshake.Load();
-            if (handshake == null) return null;
+            if (handshake == null) return new PostResult();
 
             try
             {
@@ -226,14 +255,51 @@ namespace ClassroomLive.Extension
                 {
                     request.Headers.Add("X-Extension-Token", handshake.Token);
                     using (var response = await Client.SendAsync(request).ConfigureAwait(false))
-                        return response.StatusCode;
+                        return new PostResult
+                        {
+                            Status = response.StatusCode,
+                            Command = await ReadCommandAsync(response).ConfigureAwait(false)
+                        };
                 }
             }
             catch
             {
                 HostHandshake.Invalidate();
+                return new PostResult();
+            }
+        }
+
+        /// <summary>응답 본문에 실려 오는 교수 화면 명령을 읽는다. 없으면 null.</summary>
+        private static async Task<string> ReadCommandAsync(HttpResponseMessage response)
+        {
+            if (!response.IsSuccessStatusCode) return null;
+            try
+            {
+                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (string.IsNullOrEmpty(body)) return null;
+                using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(body)))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(HostReply));
+                    var reply = serializer.ReadObject(stream) as HostReply;
+                    return string.IsNullOrEmpty(reply?.Command) ? null : reply.Command;
+                }
+            }
+            catch
+            {
                 return null;
             }
+        }
+
+        private sealed class PostResult
+        {
+            public HttpStatusCode? Status { get; set; }
+            public string Command { get; set; }
+        }
+
+        [DataContract]
+        private sealed class HostReply
+        {
+            [DataMember(Name = "command")] public string Command { get; set; }
         }
 
         /// <summary>

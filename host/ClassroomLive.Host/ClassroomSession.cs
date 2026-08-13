@@ -5,6 +5,7 @@ sealed class ClassroomSession
 {
     internal const int MaxPinAttempts = 10;
     private static readonly TimeSpan PinAttemptWindow = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan PendingCommandLifetime = TimeSpan.FromSeconds(5);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SharedFile> _files = [];
@@ -14,7 +15,12 @@ sealed class ClassroomSession
     private string? _professorActiveId;
     private string? _professorActiveName;
     private int? _professorActiveLine;
+    private string? _currentFileName;
+    private bool _currentFileShared;
+    private string? _pendingCommand;
+    private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
+    private DateTimeOffset _lastHostPoll = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "Visual Studio 확장 연결 대기 중";
 
@@ -93,6 +99,11 @@ sealed class ClassroomSession
                                     SecurityRules.IsShareable(request.FilePath, request.SolutionRoot, request.Content?.Length ?? 0);
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
+
+            // 교수 화면의 "현재 파일 공유" 버튼이 쓸 정보. 화면 고정 중에도 최신으로 둔다.
+            // 이건 표시용일 뿐이고 학생에게 나가는 내용에는 영향을 주지 않는다.
+            _currentFileName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
+            _currentFileShared = hasSafeActiveFile && action is "share" or "sync";
 
             if (action == "unshare")
             {
@@ -181,6 +192,59 @@ sealed class ClassroomSession
         TrimOldFiles();
     }
 
+    public void RecordHostPoll()
+    {
+        lock (_gate) _lastHostPoll = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// 교수 화면에서 현재 파일을 공유/해제하도록 요청한다. 확장이 다음 폴링(최대 0.6초)에서
+    /// 가져가 실행한다. 호스트에서 확장으로 가는 유일한 통로다.
+    /// </summary>
+    public void RequestShare(bool enabled)
+    {
+        lock (_gate)
+        {
+            _pendingCommand = enabled ? "share" : "unshare";
+            _pendingCommandAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    /// <summary>확장이 명령을 가져간다. 한 번만 나가고, 확장이 죽어 있으면 곧 버려진다.</summary>
+    public string? TakePendingCommand() => TakePendingCommand(PendingCommandLifetime);
+
+    /// <param name="lifetime">이 시간이 지난 명령은 버린다. 자체 검사에서 만료를 확인하려고 열어둔다.</param>
+    internal string? TakePendingCommand(TimeSpan lifetime)
+    {
+        lock (_gate)
+        {
+            if (_pendingCommand is null) return null;
+            // 확장이 꺼져 있는 동안 눌린 버튼이 나중에 되살아나면 곤란하다.
+            if (DateTimeOffset.UtcNow - _pendingCommandAt > lifetime)
+            {
+                _pendingCommand = null;
+                return null;
+            }
+
+            var command = _pendingCommand;
+            _pendingCommand = null;
+            return command;
+        }
+    }
+
+    /// <summary>
+    /// 교수 화면이 오래 닫혀 있고 보고 있는 학생도 없는 상태.
+    /// 콘솔 창을 없앤 대신 잊힌 서버가 계속 떠 있지 않게 하는 안전장치다.
+    /// </summary>
+    public bool IsIdle(TimeSpan after)
+    {
+        lock (_gate)
+        {
+            PruneViewers();
+            return _viewers.Count == 0 && DateTimeOffset.UtcNow - _lastHostPoll > after;
+        }
+    }
+
     public void RecordViewer(string? viewerId)
     {
         if (string.IsNullOrWhiteSpace(viewerId) || viewerId.Length > 100) return;
@@ -216,6 +280,8 @@ sealed class ClassroomSession
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
             return new HostSnapshot(Snapshot(), _broadcasting, connected,
                 connected ? _visualStudioStatus : "Visual Studio에서 Classroom Live 확장을 설치·실행해주세요.",
+                connected ? _currentFileName : null,
+                connected && _currentFileShared,
                 Pin, studentUrls);
         }
     }
@@ -310,6 +376,9 @@ sealed record HostSnapshot(
     bool Broadcasting,
     bool VisualStudioConnected,
     string VisualStudioStatus,
+    /// <summary>Visual Studio에서 지금 열려 있는 파일. 공유 여부와 무관하다.</summary>
+    string? CurrentFileName,
+    bool CurrentFileShared,
     string Pin,
     string[] StudentUrls);
 
@@ -414,6 +483,30 @@ static class SecurityRules
 
         // Action이 null이어도 죽지 않아야 한다.
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest(null!, null, null, null, 0));
+
+        // 교수 화면 버튼 -> 확장 명령 통로. 한 번만 나가야 확장이 두 번 실행하지 않는다.
+        Assert(session.TakePendingCommand() is null, "대기 중인 명령이 없으면 null");
+        session.RequestShare(true);
+        Assert(session.TakePendingCommand() == "share", "공유 요청이 확장에 전달된다");
+        Assert(session.TakePendingCommand() is null, "명령은 한 번만 나간다");
+        session.RequestShare(false);
+        Assert(session.TakePendingCommand() == "unshare", "해제 요청도 전달된다");
+
+        // 확장이 꺼져 있는 동안 눌린 버튼이 나중에 되살아나면 안 된다.
+        var stale = new ClassroomSession();
+        stale.RequestShare(true);
+        Assert(stale.TakePendingCommand(TimeSpan.FromSeconds(-1)) is null, "오래된 명령은 버린다");
+
+        // 유휴 종료가 엉뚱할 때 서버를 내리면 수업이 끊긴다. 두 안전장치를 확인한다.
+        var fresh = new ClassroomSession();
+        Assert(!fresh.IsIdle(TimeSpan.FromMinutes(30)), "방금 시작한 서버를 종료하지 않는다");
+        // 음수 기준으로 두면 '시간은 충분히 지났다' 조건만 참이 되어 학생 유무만 본다.
+        var elapsed = TimeSpan.FromMilliseconds(-1);
+        Assert(fresh.IsIdle(elapsed), "교수 화면도 학생도 없으면 유휴다");
+        fresh.RecordViewer("student-1");
+        Assert(!fresh.IsIdle(elapsed), "학생이 보고 있으면 종료하지 않는다");
+        fresh.RecordHostPoll();
+        Assert(!fresh.IsIdle(TimeSpan.FromMinutes(30)), "교수 화면이 살아 있으면 종료하지 않는다");
 
         Assert(!session.IsPinRateLimited("1.2.3.4"), "처음에는 제한 없음");
         for (var i = 0; i < ClassroomSession.MaxPinAttempts; i++) session.RecordPinFailure("1.2.3.4");

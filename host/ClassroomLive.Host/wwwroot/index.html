@@ -29,12 +29,14 @@
       <div class="host-state">
         <span class="eyebrow">교수 모드</span>
         <strong id="hostStatus">Visual Studio 연결 확인 중</strong>
+        <button class="tool-button" id="toggleShare" type="button" hidden>현재 파일 공유</button>
         <span class="pin">학생 PIN <b id="pinValue">------</b></span>
       </div>
       <div class="host-actions">
         <button class="secondary-button" id="allowFirewall" type="button">방화벽 허용</button>
         <button class="secondary-button" id="copyLink" type="button">학생 주소 복사</button>
         <button class="primary-button" id="toggleBroadcast" type="button">방송 시작</button>
+        <button class="secondary-button is-danger" id="shutdown" type="button">수업 종료</button>
       </div>
     </section>
 
@@ -88,17 +90,18 @@
           <span class="file-count" id="fileCount">0</span>
         </div>
         <nav class="file-list" id="fileList" aria-label="공유 파일 목록"></nav>
-        <div class="follow-note">
+        <div class="follow-note" id="followNote" hidden>
           <span aria-hidden="true">↗</span>
           <div><strong>각자 원하는 파일을 볼 수 있어요</strong><p>교수님이 다른 파일로 이동해도 내 화면은 그대로 유지됩니다.</p></div>
+          <button class="note-close" id="dismissNote" type="button" aria-label="안내 닫기">×</button>
         </div>
       </aside>
+
+      <button class="backdrop" id="backdrop" type="button" aria-label="파일 목록 닫기" hidden></button>
     </section>
   </main>
 
   <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
-
-  <button class="backdrop" id="backdrop" type="button" aria-label="파일 목록 닫기" hidden></button>
 
   <div class="gate" id="gate" hidden>
     <form class="gate-card" id="joinForm">
