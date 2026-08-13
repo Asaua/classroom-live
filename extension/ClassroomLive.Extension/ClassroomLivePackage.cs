@@ -19,12 +19,16 @@ namespace ClassroomLive.Extension
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.0")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
+    // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
+    // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
     [ProvideAutoLoad(SolutionExistsContextGuid, PackageAutoLoadFlags.BackgroundLoad)]
+    [ProvideAutoLoad(NoSolutionContextGuid, PackageAutoLoadFlags.BackgroundLoad)]
     [Guid(PackageGuidString)]
     public sealed class ClassroomLivePackage : AsyncPackage
     {
         public const string PackageGuidString = "A58CD6A3-33DC-4901-90A2-192C7615B45D";
         public const string SolutionExistsContextGuid = "F1536EF8-92EC-443C-9ED7-FDADF150DA82";
+        public const string NoSolutionContextGuid = "ADFC4E64-0397-11D1-9F4E-00A0C911004F";
 
         // vsct의 IDSymbol과 같아야 한다.
         private const int ToggleShareCommandId = 0x0100;
@@ -115,7 +119,7 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             command.Enabled = hostReachable && !string.IsNullOrWhiteSpace(ActiveFilePath());
-            command.Text = currentShared ? "현재 파일 공유 해제" : "현재 파일 공유";
+            command.Text = currentShared ? "공유 해제" : "공유";
         }
 
         private void QueryHide(object sender, EventArgs e)
@@ -124,7 +128,7 @@ namespace ClassroomLive.Extension
             var command = (OleMenuCommand)sender;
             // 공유 목록에 없는 파일은 숨길 것도 없다.
             command.Enabled = hostReachable && currentShared;
-            command.Text = currentHidden ? "현재 파일 다시 보이기" : "현재 파일 숨김";
+            command.Text = currentHidden ? "다시 보이기" : "숨김";
         }
 
         // --- 명령 ------------------------------------------------------------

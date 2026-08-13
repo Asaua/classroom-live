@@ -4,14 +4,28 @@
   <Extern href="vsshlids.h" />
 
   <!--
+    명령은 한 번만 정의하고 메뉴와 툴바 양쪽에 놓는다(CommandPlacements).
+    글자는 상황에 따라 코드에서 바꾸므로 TextChanges를 붙였고,
+    아이콘 리소스가 없으므로 TextOnly로 두어 빈 아이콘 자리가 생기지 않게 한다.
+
     단축키는 하나도 넣지 않는다. 기본값 없이 두고, 필요한 사람이
     도구 > 옵션 > 환경 > 키보드에서 아래 CommandName으로 직접 지정한다.
     지정 가능한 것은 TogglePause, ToggleShare, ToggleHide 세 가지다.
   -->
   <Commands package="guidClassroomLivePackage">
     <Menus>
+      <!-- 도구 메뉴 아래 하위 메뉴 -->
       <Menu guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" priority="0x0700" type="Menu">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+        <Strings>
+          <ButtonText>Classroom Live</ButtonText>
+          <CommandName>Classroom Live</CommandName>
+        </Strings>
+      </Menu>
+
+      <!-- 항상 보이는 툴바. 보기 > 도구 모음 > Classroom Live 로 켜고 끈다. -->
+      <Menu guid="guidClassroomLiveCommandSet" id="ClassroomLiveToolbar" type="Toolbar">
+        <CommandFlag>DefaultDocked</CommandFlag>
         <Strings>
           <ButtonText>Classroom Live</ButtonText>
           <CommandName>Classroom Live</CommandName>
@@ -20,13 +34,20 @@
     </Menus>
 
     <Groups>
-      <!-- 수업 자체를 켜고 끄는 것 -->
+      <!-- 메뉴: 수업 / 파일 -->
       <Group guid="guidClassroomLiveCommandSet" id="SessionGroup" priority="0x0100">
         <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" />
       </Group>
-      <!-- 지금 열려 있는 파일에 대한 것 -->
       <Group guid="guidClassroomLiveCommandSet" id="FileGroup" priority="0x0200">
         <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" />
+      </Group>
+
+      <!-- 툴바: 같은 구분으로 두 묶음. 사이에 구분선이 생긴다. -->
+      <Group guid="guidClassroomLiveCommandSet" id="ToolbarSessionGroup" priority="0x0100">
+        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveToolbar" />
+      </Group>
+      <Group guid="guidClassroomLiveCommandSet" id="ToolbarFileGroup" priority="0x0200">
+        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveToolbar" />
       </Group>
     </Groups>
 
@@ -34,6 +55,7 @@
       <Button guid="guidClassroomLiveCommandSet" id="StartCommand" priority="0x0100" type="Button">
         <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
         <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>TextOnly</CommandFlag>
         <Strings>
           <ButtonText>실행</ButtonText>
           <CommandName>ClassroomLive.Start</CommandName>
@@ -43,6 +65,7 @@
       <Button guid="guidClassroomLiveCommandSet" id="StopCommand" priority="0x0200" type="Button">
         <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
         <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>TextOnly</CommandFlag>
         <Strings>
           <ButtonText>종료</ButtonText>
           <CommandName>ClassroomLive.Stop</CommandName>
@@ -53,6 +76,7 @@
         <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
         <CommandFlag>TextChanges</CommandFlag>
         <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>TextOnly</CommandFlag>
         <Strings>
           <ButtonText>멈춤</ButtonText>
           <CommandName>ClassroomLive.TogglePause</CommandName>
@@ -63,8 +87,9 @@
         <Parent guid="guidClassroomLiveCommandSet" id="FileGroup" />
         <CommandFlag>TextChanges</CommandFlag>
         <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>현재 파일 공유</ButtonText>
+          <ButtonText>공유</ButtonText>
           <CommandName>ClassroomLive.ToggleShare</CommandName>
         </Strings>
       </Button>
@@ -73,20 +98,43 @@
         <Parent guid="guidClassroomLiveCommandSet" id="FileGroup" />
         <CommandFlag>TextChanges</CommandFlag>
         <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>현재 파일 숨김</ButtonText>
+          <ButtonText>숨김</ButtonText>
           <CommandName>ClassroomLive.ToggleHide</CommandName>
         </Strings>
       </Button>
     </Buttons>
   </Commands>
 
+  <!-- 같은 명령을 툴바에도 올린다. 메뉴와 툴바 어느 쪽을 눌러도 동작이 같다. -->
+  <CommandPlacements>
+    <CommandPlacement guid="guidClassroomLiveCommandSet" id="StartCommand" priority="0x0100">
+      <Parent guid="guidClassroomLiveCommandSet" id="ToolbarSessionGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClassroomLiveCommandSet" id="StopCommand" priority="0x0200">
+      <Parent guid="guidClassroomLiveCommandSet" id="ToolbarSessionGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClassroomLiveCommandSet" id="TogglePauseCommand" priority="0x0300">
+      <Parent guid="guidClassroomLiveCommandSet" id="ToolbarSessionGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" priority="0x0100">
+      <Parent guid="guidClassroomLiveCommandSet" id="ToolbarFileGroup" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClassroomLiveCommandSet" id="ToggleHideCommand" priority="0x0200">
+      <Parent guid="guidClassroomLiveCommandSet" id="ToolbarFileGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
+
   <Symbols>
     <GuidSymbol name="guidClassroomLivePackage" value="{A58CD6A3-33DC-4901-90A2-192C7615B45D}" />
     <GuidSymbol name="guidClassroomLiveCommandSet" value="{0FC38C23-09B7-4C95-89F5-BEB7321757E4}">
       <IDSymbol name="ClassroomLiveMenu" value="0x1000" />
+      <IDSymbol name="ClassroomLiveToolbar" value="0x1010" />
       <IDSymbol name="SessionGroup" value="0x1020" />
       <IDSymbol name="FileGroup" value="0x1021" />
+      <IDSymbol name="ToolbarSessionGroup" value="0x1030" />
+      <IDSymbol name="ToolbarFileGroup" value="0x1031" />
       <IDSymbol name="ToggleShareCommand" value="0x0100" />
       <IDSymbol name="StartCommand" value="0x0101" />
       <IDSymbol name="StopCommand" value="0x0102" />
