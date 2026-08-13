@@ -24,12 +24,21 @@ namespace ClassroomLive.Extension
     {
         public const string PackageGuidString = "A58CD6A3-33DC-4901-90A2-192C7615B45D";
         public const string SolutionExistsContextGuid = "F1536EF8-92EC-443C-9ED7-FDADF150DA82";
+
+        // 호스트가 살아 있을 때만 빠르게 돈다. 연결이 없으면 느리게 돌려서
+        // Classroom Live를 안 쓰는 날에도 UI 스레드를 계속 건드리지 않게 한다.
+        private const int ActiveIntervalMs = 600;
+        private const int IdleIntervalMs = 5000;
+        private const int FailuresBeforeIdle = 3;
+
         private static readonly Guid CommandSet = new Guid("0FC38C23-09B7-4C95-89F5-BEB7321757E4");
         private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         private readonly HashSet<string> sharedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private dynamic dte;
         private Timer syncTimer;
         private int syncRunning;
+        private int intervalMs = ActiveIntervalMs;
+        private int failureStreak;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -46,7 +55,7 @@ namespace ClassroomLive.Extension
                 commands.AddCommand(command);
             }
 
-            syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(600));
+            syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
 
         protected override void Dispose(bool disposing)
@@ -78,6 +87,9 @@ namespace ClassroomLive.Extension
                     return;
                 }
 
+                // 방금 사용자가 조작했으므로 느린 주기에서 즉시 빠져나온다.
+                SetInterval(ActiveIntervalMs);
+
                 if (sharedFiles.Remove(update.FilePath))
                 {
                     update.Action = "unshare";
@@ -92,7 +104,7 @@ namespace ClassroomLive.Extension
                     var status = await PostAsync(update);
                     SetStatus(status == HttpStatusCode.OK
                         ? "Classroom Live: " + Path.GetFileName(update.FilePath) + " 공유 등록"
-                        : "Classroom Live: 파일은 등록됨 · 호스트 실행 대기 중");
+                        : "Classroom Live: 파일은 등록됨 · ClassroomLive.exe 실행 대기 중");
                 }
             });
         }
@@ -113,14 +125,37 @@ namespace ClassroomLive.Extension
                     };
                     update.Action = isShared ? "sync" : "heartbeat";
                     var status = await PostAsync(update);
+                    // 교수 화면에서 ×로 내린 파일은 호스트가 409로 알려준다.
+                    // 여기서 공유 목록을 맞춰야 Ctrl+Alt+L 한 번으로 다시 공유된다.
                     if (status == HttpStatusCode.Conflict && path != null)
                         sharedFiles.Remove(path);
+                    UpdateInterval(status.HasValue);
                 }
                 finally
                 {
                     Interlocked.Exchange(ref syncRunning, 0);
                 }
             });
+        }
+
+        private void UpdateInterval(bool reachedHost)
+        {
+            if (reachedHost)
+            {
+                failureStreak = 0;
+                if (intervalMs != ActiveIntervalMs) SetInterval(ActiveIntervalMs);
+            }
+            else if (++failureStreak >= FailuresBeforeIdle && intervalMs != IdleIntervalMs)
+            {
+                SetInterval(IdleIntervalMs);
+            }
+        }
+
+        private void SetInterval(int milliseconds)
+        {
+            intervalMs = milliseconds;
+            try { syncTimer?.Change(milliseconds, milliseconds); }
+            catch (ObjectDisposedException) { }
         }
 
         private ExtensionUpdate CaptureActiveFile(bool includeContent)
@@ -166,8 +201,12 @@ namespace ClassroomLive.Extension
             catch { }
         }
 
+        /// <summary>호스트에 전송한다. 호스트에 닿지 못하면 null을 돌려준다.</summary>
         private static async Task<HttpStatusCode?> PostAsync(ExtensionUpdate update)
         {
+            var handshake = HostHandshake.Load();
+            if (handshake == null) return null;
+
             try
             {
                 var serializer = new DataContractJsonSerializer(typeof(ExtensionUpdate));
@@ -177,13 +216,75 @@ namespace ClassroomLive.Extension
                     serializer.WriteObject(stream, update);
                     json = Encoding.UTF8.GetString(stream.ToArray());
                 }
+
+                var url = "http://127.0.0.1:" + handshake.Port + "/api/extension/update";
                 using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-                using (var response = await Client.PostAsync("http://127.0.0.1:5050/api/extension/update", content).ConfigureAwait(false))
-                    return response.StatusCode;
+                using (var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content })
+                {
+                    request.Headers.Add("X-Extension-Token", handshake.Token);
+                    using (var response = await Client.SendAsync(request).ConfigureAwait(false))
+                        return response.StatusCode;
+                }
             }
             catch
             {
+                HostHandshake.Invalidate();
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// 호스트가 남기는 연결 정보. 포트를 하드코딩하지 않게 해주고,
+        /// 같은 PC의 다른 프로그램이 교실에 코드를 밀어넣지 못하게 토큰을 함께 싣는다.
+        /// </summary>
+        [DataContract]
+        private sealed class HostHandshake
+        {
+            private static readonly TimeSpan CacheFor = TimeSpan.FromSeconds(2);
+            private static HostHandshake cached;
+            private static DateTime readAt;
+
+            [DataMember(Name = "port")] public int Port { get; set; }
+            [DataMember(Name = "token")] public string Token { get; set; }
+
+            private static string FilePath
+            {
+                get
+                {
+                    return Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "ClassroomLive", "host.json");
+                }
+            }
+
+            public static HostHandshake Load()
+            {
+                if (cached != null && DateTime.UtcNow - readAt < CacheFor) return cached;
+                readAt = DateTime.UtcNow;
+                try
+                {
+                    var path = FilePath;
+                    if (!File.Exists(path)) return cached = null;
+                    using (var stream = File.OpenRead(path))
+                    {
+                        var serializer = new DataContractJsonSerializer(typeof(HostHandshake));
+                        var handshake = serializer.ReadObject(stream) as HostHandshake;
+                        return cached = (handshake != null && handshake.Port > 0 &&
+                                         !string.IsNullOrEmpty(handshake.Token))
+                            ? handshake
+                            : null;
+                    }
+                }
+                catch
+                {
+                    return cached = null;
+                }
+            }
+
+            /// <summary>호스트가 재시작하면 포트·토큰이 바뀌므로 다음 호출에서 다시 읽는다.</summary>
+            public static void Invalidate()
+            {
+                cached = null;
             }
         }
 

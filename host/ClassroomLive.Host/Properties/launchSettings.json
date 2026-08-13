@@ -4,8 +4,9 @@
     "http": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": true,
-      "applicationUrl": "http://localhost:5152",
+      "launchBrowser": false,
+      "_comment": "실제 대기 주소는 Program.cs의 UseUrls가 정한다(CLASSROOM_LIVE_PORT, 기본 5050). 여기 값은 무시된다.",
+      "applicationUrl": "http://localhost:5050",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }

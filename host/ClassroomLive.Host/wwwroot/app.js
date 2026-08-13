@@ -15,11 +15,20 @@
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
   let latestHostState = null;
   let requestRunning = false;
-  const viewerId = localStorage.getItem("classroom-live:viewer") || crypto.randomUUID();
+  let blockedUntil = 0;
+  let rendered = { fileId: "", content: null };
+
+  // crypto.randomUUID는 보안 컨텍스트(HTTPS 또는 localhost)에서만 존재한다.
+  // 학생은 http://192.168.x.x 로 접속하므로 그대로 호출하면 여기서 예외가 나고
+  // 아래 코드가 통째로 실행되지 않아 빈 화면만 보인다.
+  const newViewerId = () =>
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const viewerId = localStorage.getItem("classroom-live:viewer") || newViewerId();
   localStorage.setItem("classroom-live:viewer", viewerId);
 
   if (isHost) $("hostControls").hidden = false;
-  if (!isHost && !pin) $("gate").hidden = false;
+  if (!isHost && !pin) showGate("");
 
   $("joinForm").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -68,8 +77,21 @@
     $("backdrop").hidden = !open;
   }
 
+  function showGate(message) {
+    $("gate").hidden = false;
+    $("gateError").textContent = message;
+  }
+
+  function setText(element, value) {
+    if (element.textContent !== value) element.textContent = value;
+  }
+
   async function refresh() {
     if (requestRunning) return;
+    // 틀린 PIN을 들고 0.75초마다 계속 두드리면 서버의 시도 제한에 스스로 걸린다.
+    if (!isHost && !pin) return;
+    if (Date.now() < blockedUntil) return;
+
     requestRunning = true;
     try {
       const response = await fetch(isHost ? "/api/host/state" : "/api/state", {
@@ -80,9 +102,13 @@
       });
 
       if (!response.ok) {
-        if (!isHost && response.status === 401) {
-          $("gate").hidden = false;
-          if (pin) $("gateError").textContent = "PIN이 맞지 않습니다.";
+        if (!isHost && response.status === 429) {
+          blockedUntil = Date.now() + 60_000;
+          showGate("PIN 시도가 너무 많습니다. 1분 뒤에 다시 시도해주세요.");
+        } else if (!isHost && response.status === 401) {
+          pin = "";
+          sessionStorage.removeItem("classroom-live:pin");
+          showGate("PIN이 맞지 않습니다.");
         }
         setConnection("연결 대기", "waiting");
         return;
@@ -95,7 +121,7 @@
       render(classroom, payload);
     } catch {
       setConnection("재연결 중", "waiting");
-      $("syncStatus").textContent = "서버 연결 대기 중";
+      setText($("syncStatus"), "서버 연결 대기 중");
     } finally {
       requestRunning = false;
     }
@@ -109,31 +135,40 @@
     const selected = files.find((file) => file.id === selectedId);
     const professor = files.find((file) => file.id === classroom.professorActiveId);
 
-    $("className").textContent = classroom.className;
-    $("viewerCount").textContent = classroom.viewers;
-    $("fileCount").textContent = files.length;
-    $("mobileFileCount").textContent = files.length;
-    $("professorFile").textContent = classroom.professorActiveName || professor?.name || (classroom.broadcasting ? "선택 파일 없음" : "방송 일시정지");
-    $("syncStatus").textContent = classroom.broadcasting ? "실시간 동기화" : "방송 일시정지";
+    setText($("className"), classroom.className);
+    setText($("viewerCount"), String(classroom.viewers));
+    setText($("fileCount"), String(files.length));
+    setText($("mobileFileCount"), String(files.length));
+    setText($("professorFile"), classroom.professorActiveName || professor?.name ||
+      (classroom.broadcasting ? "선택 파일 없음" : "방송 일시정지"));
+    setText($("syncStatus"), classroom.broadcasting
+      ? "실시간 동기화"
+      : isHost ? "일시정지 · 학생 화면에서는 코드가 숨겨집니다" : "방송 일시정지");
     setConnection(classroom.broadcasting ? "LIVE" : "일시정지", classroom.broadcasting ? "live" : "paused");
 
     if (selected) {
-      const lines = selected.content.split("\n");
-      $("fileName").textContent = selected.name;
-      $("filePath").textContent = selected.path;
-      $("fileType").textContent = shortLanguage(selected.language);
-      $("language").textContent = selected.language;
-      $("lineCount").textContent = `${lines.length}줄`;
-      $("codeGutter").textContent = lines.map((_, index) => index + 1).join("\n");
-      $("codeContent").textContent = selected.content;
+      setText($("fileName"), selected.name);
+      setText($("filePath"), selected.path);
+      setText($("fileType"), shortLanguage(selected.language));
+      setText($("language"), selected.language);
+      // 코드 본문은 실제로 바뀌었을 때만 다시 쓴다. 매번 새로 쓰면 학생이 드래그한
+      // 선택 영역과 키보드 포커스가 0.75초마다 사라져서 복사조차 못 한다.
+      if (rendered.fileId !== selected.id || rendered.content !== selected.content) {
+        const lines = selected.content.split("\n");
+        $("codeGutter").textContent = lines.map((_, index) => index + 1).join("\n");
+        $("codeContent").textContent = selected.content;
+        setText($("lineCount"), `${lines.length}줄`);
+        rendered = { fileId: selected.id, content: selected.content };
+      }
       $("emptyState").hidden = true;
       $("codeScroll").hidden = false;
     } else {
-      $("fileName").textContent = "공유된 파일 없음";
-      $("filePath").textContent = "교수님이 파일을 공유하면 여기에 표시됩니다.";
-      $("fileType").textContent = "···";
-      $("language").textContent = "Text";
-      $("lineCount").textContent = "0줄";
+      setText($("fileName"), "공유된 파일 없음");
+      setText($("filePath"), "교수님이 파일을 공유하면 여기에 표시됩니다.");
+      setText($("fileType"), "···");
+      setText($("language"), "Text");
+      setText($("lineCount"), "0줄");
+      rendered = { fileId: "", content: null };
       $("emptyState").hidden = false;
       $("codeScroll").hidden = true;
     }
@@ -142,72 +177,99 @@
     if (isHost) renderHost(payload);
   }
 
+  // 목록을 통째로 다시 만들지 않고 id 기준으로 맞춰 넣는다.
+  // 그래야 폴링할 때마다 포커스와 선택이 날아가지 않는다.
   function renderFiles(files, professorActiveId) {
     const list = $("fileList");
-    list.replaceChildren();
-    for (const file of files) {
-      const item = document.createElement("div");
-      item.className = `file-item${file.id === selectedId ? " is-selected" : ""}`;
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "file-open";
-      if (file.id === selectedId) open.setAttribute("aria-current", "page");
+    const leftover = new Map();
+    for (const node of Array.from(list.children)) leftover.set(node.dataset.fileId, node);
 
-      const icon = document.createElement("span");
-      icon.className = "file-icon";
-      icon.textContent = shortLanguage(file.language);
-      const copy = document.createElement("span");
-      copy.className = "file-copy";
-      const name = document.createElement("strong");
-      name.textContent = file.name;
-      const updated = document.createElement("small");
-      updated.textContent = relativeTime(file.updatedAt);
-      copy.append(name, updated);
-      open.append(icon, copy);
+    files.forEach((file, index) => {
+      let item = leftover.get(file.id);
+      if (item) leftover.delete(file.id);
+      else item = createFileItem(file);
+      updateFileItem(item, file, professorActiveId);
+      if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+    });
 
-      if (file.id === professorActiveId) {
-        const badge = document.createElement("span");
-        badge.className = "professor-badge";
-        badge.textContent = "교수님";
-        open.append(badge);
-      }
-      item.append(open);
-      if (isHost) {
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "remove-file";
-        remove.setAttribute("aria-label", `${file.name} 공유 목록에서 제거`);
-        remove.textContent = "×";
-        remove.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          await fetch(`/api/host/files/${encodeURIComponent(file.id)}`, {
-            method: "DELETE", headers: { "X-Admin-Token": adminToken },
-          });
-          await refresh();
+    for (const stale of leftover.values()) stale.remove();
+  }
+
+  function createFileItem(file) {
+    const item = document.createElement("div");
+    item.dataset.fileId = file.id;
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "file-open";
+    open.addEventListener("click", () => {
+      selectedId = file.id;
+      localStorage.setItem("classroom-live:selected-file", selectedId);
+      openFiles(false);
+      void refresh();
+    });
+
+    const icon = document.createElement("span");
+    icon.className = "file-icon";
+    const copy = document.createElement("span");
+    copy.className = "file-copy";
+    const name = document.createElement("strong");
+    const updated = document.createElement("small");
+    copy.append(name, updated);
+    const badge = document.createElement("span");
+    badge.className = "professor-badge";
+    badge.textContent = "교수님";
+    badge.hidden = true;
+    open.append(icon, copy, badge);
+    item.append(open);
+
+    let remove = null;
+    if (isHost) {
+      remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-file";
+      remove.textContent = "×";
+      remove.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await fetch(`/api/host/files/${encodeURIComponent(file.id)}`, {
+          method: "DELETE", headers: { "X-Admin-Token": adminToken },
         });
-        item.append(remove);
-      }
-
-      open.addEventListener("click", () => {
-        selectedId = file.id;
-        localStorage.setItem("classroom-live:selected-file", selectedId);
-        openFiles(false);
-        void refresh();
+        await refresh();
       });
-      list.append(item);
+      item.append(remove);
     }
+
+    item.parts = { open, icon, name, updated, badge, remove };
+    return item;
+  }
+
+  function updateFileItem(item, file, professorActiveId) {
+    const { open, icon, name, updated, badge, remove } = item.parts;
+    const isSelected = file.id === selectedId;
+
+    const className = `file-item${isSelected ? " is-selected" : ""}`;
+    if (item.className !== className) item.className = className;
+    if (isSelected) open.setAttribute("aria-current", "page");
+    else open.removeAttribute("aria-current");
+
+    setText(icon, shortLanguage(file.language));
+    setText(name, file.name);
+    setText(updated, relativeTime(file.updatedAt));
+    badge.hidden = file.id !== professorActiveId;
+    if (remove) remove.setAttribute("aria-label", `${file.name} 공유 목록에서 제거`);
   }
 
   function renderHost(payload) {
-    $("pinValue").textContent = payload.pin;
-    $("toggleBroadcast").textContent = payload.broadcasting ? "방송 일시정지" : "방송 시작";
-    $("hostStatus").textContent = payload.visualStudioStatus;
+    setText($("pinValue"), payload.pin);
+    setText($("toggleBroadcast"), payload.broadcasting ? "방송 일시정지" : "방송 시작");
+    setText($("hostStatus"), payload.visualStudioStatus);
   }
 
   function setConnection(text, kind) {
     const element = $("connection");
-    element.className = `connection is-${kind}`;
-    element.querySelector("b").textContent = text;
+    const className = `connection is-${kind}`;
+    if (element.className !== className) element.className = className;
+    setText(element.querySelector("b"), text);
   }
 
   function shortLanguage(language) {

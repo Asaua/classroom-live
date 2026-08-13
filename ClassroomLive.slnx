@@ -1,4 +1,10 @@
 <Solution>
+  <!--
+    확장(extension/ClassroomLive.Extension)은 일부러 넣지 않는다.
+    VSIX 프로젝트는 Visual Studio의 MSBuild와 VS SDK 타깃이 있어야 빌드되므로
+    솔루션에 넣으면 'dotnet build ClassroomLive.slnx'가 통째로 실패한다.
+    확장 빌드 방법은 README.md의 '빌드' 항목 참고.
+  -->
   <Folder Name="/host/">
     <Project Path="host/ClassroomLive.Host/ClassroomLive.Host.csproj" />
   </Folder>
