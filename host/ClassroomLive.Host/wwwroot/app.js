@@ -352,8 +352,12 @@
 
     // 보던 파일이 사라졌으면 말없이 갈아치우지 않고 알려준다.
     if (selectedId && !files.some((file) => file.id === selectedId)) {
-      if (selectedName) notify(`${selectedName} 공유가 끝나 다른 파일로 옮겼어요`);
-      selectedId = classroom.professorActiveId || files[0]?.id || "";
+      const next = classroom.professorActiveId || files[0]?.id || "";
+      // 옮겨갈 파일이 없는데 "옮겼어요"라고 하면 안 된다.
+      if (selectedName) notify(next
+        ? `${selectedName} 공유가 끝나 다른 파일로 옮겼어요`
+        : `${selectedName} 공유가 끝났어요`);
+      selectedId = next;
     } else if (!selectedId) {
       selectedId = classroom.professorActiveId || files[0]?.id || "";
     }

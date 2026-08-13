@@ -60,6 +60,12 @@ button, input { font: inherit }
   box-shadow: 0 0 28px rgba(184, 245, 65, .16);
 }
 .brand { font-size: 15px; font-weight: 750; letter-spacing: -.02em }
+.byline {
+  margin-left: 5px;
+  color: var(--muted-small);
+  font-size: 10px; font-weight: 300; font-style: italic;
+  letter-spacing: 0; white-space: nowrap;
+}
 .class-name { margin-top: 2px; color: var(--muted); font-size: 12px }
 .session-summary { gap: 20px }
 .connection {
