@@ -55,7 +55,9 @@ namespace ClassroomLive.Extension
         // 마지막 폴링에서 받은 호스트 상태. 메뉴 글자와 활성 여부를 여기서 정한다.
         private bool hostReachable;
         private bool broadcasting;
+        private bool everStarted;
         private bool currentShareable;
+        private string currentBlockReason;
         private bool currentShared;
         private bool currentHidden;
 
@@ -111,7 +113,7 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             command.Enabled = hostReachable;
-            command.Text = broadcasting ? "멈춤" : "시작";
+            command.Text = broadcasting ? "일시정지" : everStarted ? "재개" : "시작";
         }
 
         private void QueryShare(object sender, EventArgs e)
@@ -178,7 +180,8 @@ namespace ClassroomLive.Extension
                     return;
                 }
                 broadcasting = next;
-                SetStatus(next ? "Classroom Live · 시작" : "Classroom Live · 멈춤");
+                if (next) everStarted = true;
+                SetStatus(next ? "Classroom Live · 시작" : "Classroom Live · 일시정지");
             });
         }
 
@@ -197,7 +200,7 @@ namespace ClassroomLive.Extension
                 // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
                 if (!currentShared && !currentShareable)
                 {
-                    SetStatus("Classroom Live · 추가할 수 없는 타입의 파일입니다");
+                    SetStatus("Classroom Live · " + (currentBlockReason ?? "공유할 수 없는 파일입니다"));
                     return;
                 }
 
@@ -290,7 +293,9 @@ namespace ClassroomLive.Extension
             if (result.Reply == null) return;
 
             broadcasting = result.Reply.Broadcasting;
+            everStarted = result.Reply.EverStarted;
             currentShareable = result.Reply.Shareable;
+            currentBlockReason = result.Reply.BlockReason;
             currentShared = result.Reply.Shared;
             currentHidden = result.Reply.Hidden;
         }
@@ -481,7 +486,9 @@ namespace ClassroomLive.Extension
         {
             [DataMember(Name = "command")] public string Command { get; set; }
             [DataMember(Name = "broadcasting")] public bool Broadcasting { get; set; }
+            [DataMember(Name = "everStarted")] public bool EverStarted { get; set; }
             [DataMember(Name = "shareable")] public bool Shareable { get; set; }
+            [DataMember(Name = "blockReason")] public string BlockReason { get; set; }
             [DataMember(Name = "shared")] public bool Shared { get; set; }
             [DataMember(Name = "hidden")] public bool Hidden { get; set; }
         }

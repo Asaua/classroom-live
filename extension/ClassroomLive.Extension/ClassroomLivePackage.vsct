@@ -78,7 +78,7 @@
         <CommandFlag>DefaultDisabled</CommandFlag>
         <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>멈춤</ButtonText>
+          <ButtonText>일시정지</ButtonText>
           <CommandName>ClassroomLive.TogglePause</CommandName>
         </Strings>
       </Button>

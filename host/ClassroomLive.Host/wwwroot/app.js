@@ -104,7 +104,7 @@
     const enabled = button.dataset.shared !== "1";
     // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
     if (enabled && button.dataset.shareable !== "1")
-      return notify("추가할 수 없는 타입의 파일이에요");
+      return notify(button.dataset.reason || "공유할 수 없는 파일이에요");
     button.disabled = true;
     try {
       const response = await fetch("/api/host/share", {
@@ -372,14 +372,17 @@
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
-    const professorName = classroom.professorActiveName || professor?.name || (live ? "없음" : "멈춤");
+    const professorName = classroom.professorActiveName || professor?.name || (live ? "없음" : "일시정지");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
 
+    // 아직 한 번도 시작하지 않은 상태를 일시정지라고 부르면 거짓말이 된다.
+    const started = isHost ? Boolean(payload.everStarted) : classroom.files.length > 0;
     setText($("syncStatus"), live
       ? "실시간"
-      : isHost ? "멈춤 · 학생은 마지막 화면을 봐요" : "멈춤 · 마지막 화면");
-    setConnection(live ? "실시간" : "멈춤", live ? "live" : "paused");
+      : !started ? "시작 전"
+      : isHost ? "일시정지 · 학생은 마지막 화면을 봐요" : "일시정지 · 마지막 화면");
+    setConnection(live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : "paused");
 
     if (selected) {
       setText($("fileName"), selected.name);
@@ -663,6 +666,7 @@ while with yield None True False
       hide = document.createElement("button");
       hide.type = "button";
       hide.className = "hide-file";
+      hide.setAttribute("aria-pressed", "false");
       hide.addEventListener("click", async (event) => {
         event.stopPropagation();
         await setHidden(file.id, hide.dataset.hidden !== "1");
@@ -703,17 +707,21 @@ while with yield None True False
     badge.hidden = file.id !== professorActiveId;
     if (remove) remove.setAttribute("aria-label", `${file.name} 공유 해제`);
     if (hide) {
-      hide.dataset.hidden = file.hidden ? "1" : "0";
-      setText(hide, file.hidden ? "보임" : "숨김");
-      hide.setAttribute("aria-label",
-        file.hidden ? `${file.name} 다시 보이기` : `${file.name} 학생 화면에서 숨기기`);
-      hide.classList.toggle("is-active", Boolean(file.hidden));
+      // 아이콘은 상태를, aria-pressed는 눌린 상태(=숨김)를 나타낸다.
+      const isHidden = Boolean(file.hidden);
+      hide.dataset.hidden = isHidden ? "1" : "0";
+      hide.setAttribute("aria-pressed", String(isHidden));
+      hide.setAttribute("aria-label", `${file.name} 학생 화면에서 숨기기`);
+      setTitle(hide, isHidden ? "숨김 · 눌러서 다시 보이기" : "보이는 중 · 눌러서 숨기기");
     }
   }
 
   function renderHost(payload) {
     setText($("pinValue"), payload.pin);
-    setText($("toggleBroadcast"), payload.broadcasting ? "멈춤" : "시작");
+    // 한 번도 시작한 적 없으면 "시작", 돌다가 멈췄으면 "재개"로 구분한다.
+    setText($("toggleBroadcast"), payload.broadcasting
+      ? "일시정지"
+      : payload.everStarted ? "재개" : "시작");
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
@@ -728,13 +736,15 @@ while with yield None True False
     const shared = Boolean(payload.currentFileShared);
     const shareable = Boolean(payload.currentFileShareable);
     setText(share, shared ? `${current} 공유 해제` : `${current} 공유`);
+    const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
     setTitle(share, shared
       ? "학생 목록에서 뺍니다"
-      : shareable ? "학생에게 이 파일을 보여줍니다" : "공유할 수 없는 타입의 파일입니다");
+      : shareable ? "학생에게 이 파일을 보여줍니다" : reason);
     share.classList.toggle("is-active", shared);
     share.classList.toggle("is-blocked", !shared && !shareable);
     share.dataset.shared = shared ? "1" : "0";
     share.dataset.shareable = shareable ? "1" : "0";
+    share.dataset.reason = shareable ? "" : reason;
 
     const hidden = Boolean(payload.currentFileHidden);
     setText(hide, hidden ? "다시 보이기" : "숨김");

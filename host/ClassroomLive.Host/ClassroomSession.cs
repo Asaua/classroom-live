@@ -19,9 +19,11 @@ sealed class ClassroomSession
     private string? _currentFileName;
     private string? _currentFileId;
     private bool _currentFileShareable;
+    private string? _currentFileBlockReason;
     private string? _pendingCommand;
     private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
+    private bool _everStarted;
     private DateTimeOffset _lastHostPoll = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "연결 대기";
@@ -82,7 +84,12 @@ sealed class ClassroomSession
     /// </summary>
     public void SetBroadcasting(bool enabled)
     {
-        lock (_gate) _broadcasting = enabled;
+        lock (_gate)
+        {
+            _broadcasting = enabled;
+            // 처음 켜는 것과 멈췄다 다시 켜는 것을 화면에서 구분하려고 기억해둔다.
+            if (enabled) _everStarted = true;
+        }
     }
 
     /// <summary>
@@ -98,7 +105,7 @@ sealed class ClassroomSession
             var action = request.Action?.ToLowerInvariant();
             var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) &&
                                     !string.IsNullOrWhiteSpace(request.SolutionRoot) &&
-                                    SecurityRules.IsShareable(request.FilePath, request.SolutionRoot, request.Content?.Length ?? 0);
+                                    SecurityRules.IsShareable(request.FilePath, request.SolutionRoot, request.Content);
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
 
@@ -108,6 +115,9 @@ sealed class ClassroomSession
                 ? null
                 : Path.GetFileName(request.FilePath);
             _currentFileShareable = hasSafeActiveFile;
+            _currentFileBlockReason = string.IsNullOrWhiteSpace(request.FilePath) || hasSafeActiveFile
+                ? null
+                : SecurityRules.BlockReason(request.FilePath, request.SolutionRoot ?? "", request.Content);
             _currentFileId = activeId;
 
             // 숨김은 되돌릴 수 있다. 파일은 목록에 남고 학생 화면에서만 빠진다.
@@ -138,7 +148,7 @@ sealed class ClassroomSession
             {
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
-                _visualStudioStatus = "멈춤 · 학생은 마지막 화면을 봐요";
+                _visualStudioStatus = "일시정지 · 학생은 마지막 화면을 봐요";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -158,7 +168,7 @@ sealed class ClassroomSession
             if (!hasSafeActiveFile || request.Content is null)
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = "공유할 수 없는 파일";
+                _visualStudioStatus = _currentFileBlockReason ?? "공유할 수 없는 파일";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -187,7 +197,7 @@ sealed class ClassroomSession
 
     private void UpdateSharedFile(string fullPath, string content, string solutionRoot)
     {
-        if (!_broadcasting || !SecurityRules.IsShareable(fullPath, solutionRoot, content.Length)) return;
+        if (!_broadcasting || !SecurityRules.IsShareable(fullPath, solutionRoot, content)) return;
 
         var normalizedPath = Path.GetFullPath(fullPath);
         var id = FileId(normalizedPath);
@@ -240,7 +250,9 @@ sealed class ClassroomSession
             return new ExtensionReply(
                 TakePendingCommand(),
                 _broadcasting,
+                _everStarted,
                 _currentFileShareable,
+                _currentFileBlockReason,
                 CurrentFileIsShared(),
                 CurrentFileIsHidden());
         }
@@ -329,10 +341,11 @@ sealed class ClassroomSession
             PruneViewers();
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
             // 교수 화면은 숨긴 파일까지 봐야 되돌릴 수 있다.
-            return new HostSnapshot(Snapshot(_ => true), _broadcasting, connected,
+            return new HostSnapshot(Snapshot(_ => true), _broadcasting, _everStarted, connected,
                 connected ? _visualStudioStatus : "Visual Studio 연결 대기",
                 connected ? _currentFileName : null,
                 connected && _currentFileShareable,
+                connected ? _currentFileBlockReason : null,
                 connected && CurrentFileIsShared(),
                 connected && CurrentFileIsHidden(),
                 Pin, studentUrls);
@@ -421,7 +434,9 @@ static class HostHandshake
 sealed record ExtensionReply(
     string? Command,
     bool Broadcasting,
+    bool EverStarted,
     bool Shareable,
+    string? BlockReason,
     bool Shared,
     bool Hidden);
 
@@ -453,11 +468,15 @@ sealed record ClassroomSnapshot(
 sealed record HostSnapshot(
     ClassroomSnapshot Classroom,
     bool Broadcasting,
+    /// <summary>한 번이라도 시작했는지. 버튼을 "시작"과 "재개"로 나누는 데 쓴다.</summary>
+    bool EverStarted,
     bool VisualStudioConnected,
     string VisualStudioStatus,
     /// <summary>Visual Studio에서 지금 열려 있는 파일. 공유 여부와 무관하다.</summary>
     string? CurrentFileName,
     bool CurrentFileShareable,
+    /// <summary>공유할 수 없을 때 그 이유. 공유 가능하면 null.</summary>
+    string? CurrentFileBlockReason,
     bool CurrentFileShared,
     bool CurrentFileHidden,
     string Pin,
@@ -466,48 +485,106 @@ sealed record HostSnapshot(
 static class SecurityRules
 {
     private const int MaxCharacters = 1_000_000;
-    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".cs", ".cshtml", ".razor", ".cpp", ".c", ".h", ".hpp", ".java", ".kt",
-        ".js", ".jsx", ".ts", ".tsx", ".py", ".html", ".css", ".scss", ".sql",
-        ".xml", ".xaml", ".json", ".yaml", ".yml", ".md", ".txt", ".shader"
-    };
+    private const StringComparison Ignore = StringComparison.OrdinalIgnoreCase;
+
+    // 예전에는 확장자 허용 목록이었다. .go, .rs, .php, Makefile처럼 멀쩡한 텍스트가
+    // 전부 막혀서 뒤집었다. 무엇이 텍스트인지는 Visual Studio가 이미 판단한다.
+    // TextDocument로 열리지 않는 파일은 확장이 애초에 보내지 못한다.
+    // 그래서 여기서는 '텍스트인가'를 다시 묻지 않고, 새어 나가면 안 되는 것만 막는다.
     private static readonly HashSet<string> BlockedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".vs", "bin", "obj", "node_modules", "secrets"
+        ".git", ".vs", ".idea", "bin", "obj", "node_modules", "packages", "secrets",
+        ".venv", "venv", "__pycache__", "target"
     };
 
-    public static bool IsShareable(string filePath, string solutionRoot, int characterCount)
+    /// <summary>내용이 텍스트여도 학생에게 나가면 안 되는 것.</summary>
+    private static readonly HashSet<string> SecretExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (characterCount > MaxCharacters || string.IsNullOrWhiteSpace(solutionRoot)) return false;
+        ".pem", ".key", ".pfx", ".p12", ".crt", ".cer", ".jks", ".keystore", ".ppk", ".asc", ".gpg"
+    };
+
+    /// <summary>공유할 수 없으면 그 이유를, 공유해도 되면 null을 돌려준다.</summary>
+    public static string? BlockReason(string filePath, string solutionRoot, string? content)
+    {
+        if (string.IsNullOrWhiteSpace(solutionRoot)) return "솔루션이 열려 있지 않습니다";
+        if ((content?.Length ?? 0) > MaxCharacters) return "파일이 너무 큽니다";
 
         var fullFile = Path.GetFullPath(filePath);
         var fullRoot = Path.GetFullPath(solutionRoot);
         var relative = Path.GetRelativePath(fullRoot, fullFile);
         if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}"))
-            return false;
+            return "솔루션 폴더 밖의 파일입니다";
 
         var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
-        var fileName = Path.GetFileName(fullFile);
-        return AllowedExtensions.Contains(Path.GetExtension(fullFile)) &&
-               !segments.Any(BlockedDirectories.Contains) &&
-               !fileName.Equals(".env", StringComparison.OrdinalIgnoreCase) &&
-               !fileName.StartsWith(".env.", StringComparison.OrdinalIgnoreCase) &&
-               !fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase) &&
-               !fileName.Equals("secrets.json", StringComparison.OrdinalIgnoreCase);
+        if (segments.Any(BlockedDirectories.Contains)) return "빌드·도구 폴더의 파일입니다";
+
+        if (IsSecretName(Path.GetFileName(fullFile))) return "비밀이 들어 있을 수 있는 파일입니다";
+        if (content is not null && LooksBinary(content)) return "텍스트 파일이 아닙니다";
+
+        return null;
+    }
+
+    public static bool IsShareable(string filePath, string solutionRoot, string? content) =>
+        BlockReason(filePath, solutionRoot, content) is null;
+
+    private static bool IsSecretName(string name) =>
+        name.Equals(".env", Ignore) || name.StartsWith(".env.", Ignore) ||
+        name.StartsWith("appsettings", Ignore) ||
+        name.Equals("secrets.json", Ignore) ||
+        name.Equals(".npmrc", Ignore) || name.Equals(".netrc", Ignore) ||
+        name.StartsWith("id_rsa", Ignore) || name.StartsWith("id_ed25519", Ignore) ||
+        name.EndsWith(".user", Ignore) ||
+        name.EndsWith(".pubxml", Ignore) ||
+        SecretExtensions.Contains(Path.GetExtension(name));
+
+    /// <summary>
+    /// 이진 파일을 소스 편집기로 억지로 연 경우를 잡는 마지막 그물.
+    /// NUL이 있거나 제어문자가 지나치게 많으면 텍스트가 아니다.
+    /// </summary>
+    private static bool LooksBinary(string content)
+    {
+        var limit = Math.Min(content.Length, 4000);
+        if (limit == 0) return false;
+
+        var control = 0;
+        for (var index = 0; index < limit; index++)
+        {
+            var character = content[index];
+            if (character == '\0') return true;
+            if (char.IsControl(character) && character is not ('\r' or '\n' or '\t')) control++;
+        }
+        return control * 100 / limit > 2;
     }
 
     public static string LanguageFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
         ".cs" or ".cshtml" or ".razor" => "C#",
-        ".cpp" or ".c" or ".h" or ".hpp" => "C++",
-        ".js" or ".jsx" => "JavaScript",
+        ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => "C++",
+        ".js" or ".jsx" or ".mjs" or ".cjs" => "JavaScript",
         ".ts" or ".tsx" => "TypeScript",
         ".py" => "Python",
-        ".html" => "HTML",
-        ".css" or ".scss" => "CSS",
-        ".json" => "JSON",
+        ".go" => "Go",
+        ".rs" => "Rust",
+        ".java" => "Java",
+        ".kt" or ".kts" => "Kotlin",
+        ".swift" => "Swift",
+        ".rb" => "Ruby",
+        ".php" => "PHP",
+        ".lua" => "Lua",
+        ".dart" => "Dart",
+        ".vb" => "VB",
+        ".fs" or ".fsx" => "F#",
+        ".sh" or ".bash" or ".zsh" => "Shell",
+        ".ps1" or ".psm1" => "PowerShell",
+        ".bat" or ".cmd" => "Batch",
+        ".toml" => "TOML",
+        ".ini" or ".cfg" or ".conf" => "INI",
+        ".md" or ".markdown" => "Markdown",
+        ".glsl" or ".hlsl" or ".cginc" or ".shader" => "Shader",
+        ".html" or ".htm" => "HTML",
+        ".css" or ".scss" or ".sass" or ".less" => "CSS",
+        ".json" or ".jsonc" => "JSON",
         ".xml" or ".xaml" => "XML",
         ".sql" => "SQL",
         _ => "Text"
@@ -516,12 +593,34 @@ static class SecurityRules
     public static void SelfTest()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClassroomLiveTest", "Solution");
-        Assert(IsShareable(Path.Combine(root, "Scripts", "Player.cs"), root, 100), "일반 코드 파일 허용");
-        Assert(!IsShareable(Path.Combine(root, "..", "private.cs"), root, 100), "솔루션 외부 차단");
-        Assert(!IsShareable(Path.Combine(root, ".env"), root, 100), ".env 차단");
-        Assert(!IsShareable(Path.Combine(root, "bin", "Generated.cs"), root, 100), "빌드 폴더 차단");
-        Assert(!IsShareable(Path.Combine(root, "logo.png"), root, 100), "바이너리 확장자 차단");
-        Assert(!IsShareable(Path.Combine(root, "Huge.cs"), root, MaxCharacters + 1), "대용량 파일 차단");
+        string Text(int length = 100) => new('x', length);
+        bool Ok(string name) => IsShareable(Path.Combine(root, name), root, Text());
+
+        Assert(Ok(Path.Combine("Scripts", "Player.cs")), "일반 코드 파일 허용");
+        // 확장자 허용 목록을 없앴다. Visual Studio가 텍스트로 열 수 있으면 무엇이든 된다.
+        foreach (var name in new[]
+                 {
+                     "main.go", "lib.rs", "app.php", "View.swift", "script.lua", "Cargo.toml",
+                     "Makefile", ".gitignore", "build.gradle", "CMakeLists.txt", "notes.rst",
+                     "deploy.sh", "Setup.ps1", "Player.vb", "index.vue", "Scene.unity",
+                     "query.graphql", "schema.prisma", "Dockerfile", "app.r"
+                 })
+            Assert(Ok(name), $"텍스트 파일 허용: {name}");
+
+        Assert(!IsShareable(Path.Combine(root, "..", "private.cs"), root, Text()), "솔루션 외부 차단");
+        Assert(!Ok(".env"), ".env 차단");
+        Assert(!Ok(".env.production"), ".env.* 차단");
+        Assert(!Ok("appsettings.json"), "appsettings 차단");
+        Assert(!Ok("server.pem"), "인증서 차단");
+        Assert(!Ok("id_rsa"), "개인키 차단");
+        Assert(!Ok("Project.csproj.user"), "사용자 설정 차단");
+        Assert(!Ok(Path.Combine("bin", "Generated.cs")), "빌드 폴더 차단");
+        Assert(!Ok(Path.Combine("node_modules", "index.js")), "의존성 폴더 차단");
+        Assert(!IsShareable(Path.Combine(root, "Huge.cs"), root, Text(MaxCharacters + 1)), "대용량 파일 차단");
+        // 이진 파일을 소스 편집기로 억지로 연 경우.
+        Assert(!IsShareable(Path.Combine(root, "logo.png"), root, "\u0089PNG\0\u001a"), "내용이 이진이면 차단");
+        Assert(BlockReason(Path.Combine(root, ".env"), root, Text()) == "비밀이 들어 있을 수 있는 파일입니다",
+            "막힌 이유를 알려준다");
 
         SessionSelfTest();
     }
@@ -604,8 +703,12 @@ static class SecurityRules
         Assert(reply.Broadcasting && reply.Shareable && reply.Shared && !reply.Hidden, "공유 중 상태가 확장에 전달된다");
         replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("hide", file, root, null, 0));
         Assert(replySession.BuildReply().Hidden, "숨김 상태가 확장에 전달된다");
-        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("heartbeat", Path.Combine(root, "logo.png"), root, null, 0));
+        // 이름만으로 막히는 파일은 내용 없이도 바로 알 수 있다.
+        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("heartbeat", Path.Combine(root, ".env"), root, null, 0));
         Assert(!replySession.BuildReply().Shareable, "공유할 수 없는 파일이면 확장이 안다");
+        // 내용을 봐야 아는 경우는 공유를 시도할 때 걸러진다.
+        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", Path.Combine(root, "logo.png"), root, "PNG\0", 0));
+        Assert(!replySession.BuildReply().Shared, "내용이 이진이면 공유되지 않는다");
 
         // 유휴 종료가 엉뚱할 때 서버를 내리면 수업이 끊긴다. 두 안전장치를 확인한다.
         var fresh = new ClassroomSession();
