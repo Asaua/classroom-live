@@ -23,10 +23,10 @@ var webRoot = Path.Combine(publishedRoot, "wwwroot");
 if (!File.Exists(Path.Combine(webRoot, "index.html")))
 {
     HostConsole.Error($"""
-        화면 파일(wwwroot/index.html)을 찾지 못했습니다.
+        화면 파일을 찾지 못했습니다.
 
-        확인한 경로: {webRoot}
-        'dotnet publish -c Release' 로 만든 폴더에서 실행해주세요.
+        경로: {webRoot}
+        dotnet publish 로 만든 폴더에서 실행해 주세요.
         """);
     return 1;
 }
@@ -147,23 +147,23 @@ app.MapPost("/api/host/firewall", (HttpContext context, ClassroomSession session
             Verb = "runas",
             WindowStyle = ProcessWindowStyle.Hidden
         });
-        if (process is null) return Results.Problem("방화벽 설정을 시작하지 못했습니다.");
+        if (process is null) return Results.Problem("방화벽 설정을 시작하지 못했어요");
 
         // 관리자 권한 창을 그대로 두면 요청 스레드가 무한정 묶인다.
         if (!process.WaitForExit(120_000))
-            return Results.Problem("방화벽 허용 요청이 시간 내에 끝나지 않았습니다.");
+            return Results.Problem("방화벽 허용이 시간 내에 끝나지 않았어요");
 
         return process.ExitCode == 0
-            ? Results.Ok(new { message = "로컬 네트워크 방화벽 허용이 완료되었습니다." })
-            : Results.Problem("방화벽 허용이 취소되었거나 실패했습니다.");
+            ? Results.Ok(new { message = "방화벽을 허용했어요" })
+            : Results.Problem("방화벽 허용이 취소됐거나 실패했어요");
     }
     catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == 1223)
     {
-        return Results.Problem("관리자 권한 요청이 취소되었습니다.");
+        return Results.Problem("관리자 권한 요청이 취소됐어요");
     }
     catch (Exception exception)
     {
-        return Results.Problem($"방화벽 허용에 실패했습니다: {exception.Message}");
+        return Results.Problem($"방화벽 허용에 실패했어요: {exception.Message}");
     }
 });
 
@@ -236,7 +236,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
         // 창을 없앴으므로 여기서 못 알리면 교수님은 주소를 볼 방법이 전혀 없다.
         HostConsole.Info($"""
             브라우저를 자동으로 열지 못했습니다.
-            아래 주소를 직접 열어주세요.
+            아래 주소를 직접 열어 주세요.
 
             교수 화면:
             {hostUrl}
@@ -261,7 +261,7 @@ try
 catch (IOException exception)
 {
     HostConsole.Error($"""
-        {port}번 포트를 사용할 수 없습니다.
+        {port}번 포트를 쓸 수 없습니다.
         다른 프로그램이 쓰고 있거나 Classroom Live가 이미 실행 중입니다.
 
         {exception.Message}

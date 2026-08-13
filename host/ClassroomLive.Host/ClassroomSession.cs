@@ -22,7 +22,7 @@ sealed class ClassroomSession
     private bool _broadcasting;
     private DateTimeOffset _lastHostPoll = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
-    private string _visualStudioStatus = "Visual Studio 확장 연결 대기 중";
+    private string _visualStudioStatus = "연결 대기";
 
     public string Pin { get; } = RandomNumberGenerator.GetInt32(100_000, 1_000_000).ToString();
     public string AdminToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
@@ -75,7 +75,7 @@ sealed class ClassroomSession
     }
 
     /// <summary>
-    /// 방송을 켜고 끈다. 끄면 '화면 고정'이다. 학생 화면은 마지막 상태 그대로 남고
+    /// 실시간 갱신을 켜고 끈다. 끄면 '멈춤'이다. 학생 화면은 마지막 상태 그대로 남고
     /// 갱신만 멈춘다. 파일을 학생에게서 완전히 내리려면 Remove를 쓴다.
     /// </summary>
     public void SetBroadcasting(bool enabled)
@@ -100,7 +100,7 @@ sealed class ClassroomSession
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
 
-            // 교수 화면의 "현재 파일 공유" 버튼이 쓸 정보. 화면 고정 중에도 최신으로 둔다.
+            // 교수 화면의 "현재 파일 공유" 버튼이 쓸 정보. 멈춤 중에도 최신으로 둔다.
             // 이건 표시용일 뿐이고 학생에게 나가는 내용에는 영향을 주지 않는다.
             _currentFileName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
             _currentFileShared = hasSafeActiveFile && action is "share" or "sync";
@@ -114,15 +114,15 @@ sealed class ClassroomSession
                     _suppressedFiles.Remove(id);
                     if (_professorActiveId == id) ClearProfessorPointer();
                 }
-                _visualStudioStatus = "연결됨 · 현재 파일 공유 해제됨";
+                _visualStudioStatus = "공유 해제됨";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
             if (!_broadcasting)
             {
-                // 화면 고정 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
-                // 발밑에서 움직이지 않아야 '고정'이라는 말이 지켜진다.
-                _visualStudioStatus = "연결됨 · 화면 고정 중 (학생에게는 마지막 화면이 보입니다)";
+                // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
+                // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
+                _visualStudioStatus = "멈춤 · 학생은 마지막 화면을 봐요";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -134,22 +134,22 @@ sealed class ClassroomSession
                 _professorActiveId = activeId is not null && _files.ContainsKey(activeId) ? activeId : null;
                 _professorActiveLine = _professorActiveId is null ? null : activeLine;
                 _visualStudioStatus = _professorActiveName is null
-                    ? "연결됨 · 코드 파일을 선택해주세요."
-                    : $"연결됨 · {_professorActiveName} (공유 안 함)";
+                    ? "코드 파일을 선택해 주세요"
+                    : $"{_professorActiveName} · 공유 안 함";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
             if (!hasSafeActiveFile || request.Content is null)
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = "현재 파일은 보안 규칙으로 공유할 수 없습니다.";
+                _visualStudioStatus = "공유할 수 없는 파일";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
             if (_suppressedFiles.Contains(activeId!))
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = "연결됨 · 현재 파일은 호스트 목록에서 숨겨짐";
+                _visualStudioStatus = "내려둔 파일";
                 return ExtensionUpdateOutcome.Suppressed;
             }
 
@@ -157,7 +157,7 @@ sealed class ClassroomSession
             _professorActiveName = Path.GetFileName(request.FilePath);
             _professorActiveId = _files.ContainsKey(activeId!) ? activeId : null;
             _professorActiveLine = _professorActiveId is null ? null : activeLine;
-            _visualStudioStatus = $"연결됨 · {_professorActiveName} 추적 중";
+            _visualStudioStatus = $"{_professorActiveName} · 공유 중";
             return ExtensionUpdateOutcome.Accepted;
         }
     }
@@ -279,7 +279,7 @@ sealed class ClassroomSession
             PruneViewers();
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
             return new HostSnapshot(Snapshot(), _broadcasting, connected,
-                connected ? _visualStudioStatus : "Visual Studio에서 Classroom Live 확장을 설치·실행해주세요.",
+                connected ? _visualStudioStatus : "Visual Studio 연결 대기",
                 connected ? _currentFileName : null,
                 connected && _currentFileShared,
                 Pin, studentUrls);
@@ -287,7 +287,7 @@ sealed class ClassroomSession
     }
 
     private ClassroomSnapshot Snapshot() => new(
-        "Classroom Live 수업",
+        "수업 중",
         _professorActiveId,
         _professorActiveName,
         _professorActiveLine,
@@ -457,16 +457,16 @@ static class SecurityRules
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 3));
 
         var live = session.GetSnapshot();
-        Assert(live.Files.Length == 1, "방송 중에는 학생이 파일을 본다");
+        Assert(live.Files.Length == 1, "실시간일 때 학생이 파일을 본다");
         Assert(live.ProfessorActiveLine == 3, "교수가 보는 줄이 전달된다");
 
-        // 화면 고정: 마지막 상태는 남고 갱신만 멈춘다.
+        // 멈춤: 마지막 상태는 남고 갱신만 멈춘다.
         session.SetBroadcasting(false);
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 99));
         var frozen = session.GetSnapshot();
-        Assert(frozen.Files.Length == 1, "고정해도 학생 화면은 남는다");
-        Assert(frozen.Files[0].Content == "class Player {}", "고정 중에는 내용이 갱신되지 않는다");
-        Assert(frozen.ProfessorActiveLine == 3, "고정 중에는 교수 위치도 움직이지 않는다");
+        Assert(frozen.Files.Length == 1, "멈춰도 학생 화면은 남는다");
+        Assert(frozen.Files[0].Content == "class Player {}", "멈춤 중에는 내용이 갱신되지 않는다");
+        Assert(frozen.ProfessorActiveLine == 3, "멈춤 중에는 교수 위치도 움직이지 않는다");
 
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));

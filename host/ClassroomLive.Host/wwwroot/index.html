@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="교수님의 코드를 같은 교실에서 실시간으로 확인하세요.">
+  <meta name="description" content="교수님 화면의 코드를 내 기기에서 봅니다.">
   <title>Classroom Live</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -15,28 +15,27 @@
         <span class="brand-mark" aria-hidden="true">C</span>
         <div>
           <div class="brand">Classroom Live</div>
-          <div class="class-name" id="className">수업 연결 중</div>
+          <div class="class-name" id="className">연결 중</div>
         </div>
       </div>
       <div class="session-summary">
         <span class="connection is-waiting" id="connection" aria-live="polite"><i></i><b>연결 중</b></span>
-        <span class="viewer-count"><b id="viewerCount">0</b>명 접속 중</span>
-        <button class="mobile-files" id="mobileFiles" type="button" aria-label="공유 파일 열기">파일 <span id="mobileFileCount">0</span></button>
+        <span class="viewer-count" title="보고 있는 학생 수"><b id="viewerCount">0</b>명</span>
+        <button class="mobile-files" id="mobileFiles" type="button" aria-label="공유 파일 목록 열기">파일 <span id="mobileFileCount">0</span></button>
       </div>
     </header>
 
     <section class="host-controls" id="hostControls" hidden>
       <div class="host-state">
-        <span class="eyebrow">교수 모드</span>
-        <strong id="hostStatus">Visual Studio 연결 확인 중</strong>
+        <strong id="hostStatus">연결 대기</strong>
         <button class="tool-button" id="toggleShare" type="button" hidden>현재 파일 공유</button>
-        <span class="pin">학생 PIN <b id="pinValue">------</b></span>
+        <span class="pin">PIN <b id="pinValue">------</b></span>
       </div>
       <div class="host-actions">
-        <button class="secondary-button" id="allowFirewall" type="button">방화벽 허용</button>
-        <button class="secondary-button" id="copyLink" type="button">학생 주소 복사</button>
-        <button class="primary-button" id="toggleBroadcast" type="button">방송 시작</button>
-        <button class="secondary-button is-danger" id="shutdown" type="button">수업 종료</button>
+        <button class="secondary-button" id="allowFirewall" type="button" title="같은 와이파이의 학생이 접속할 수 있게 합니다">방화벽 허용</button>
+        <button class="secondary-button" id="copyLink" type="button" title="학생에게 보낼 주소를 복사합니다">주소 복사</button>
+        <button class="primary-button" id="toggleBroadcast" type="button">시작</button>
+        <button class="secondary-button is-danger" id="shutdown" type="button">종료</button>
       </div>
     </section>
 
@@ -47,29 +46,29 @@
             <span class="file-type" id="fileType">···</span>
             <div class="file-heading-copy">
               <div class="file-title-row">
-                <h1 id="fileName">공유된 파일 없음</h1>
+                <h1 id="fileName">파일 없음</h1>
                 <span>내 화면</span>
               </div>
-              <p id="filePath">교수님이 파일을 공유하면 여기에 표시됩니다.</p>
+              <p id="filePath">교수님이 공유하면 여기에 나타나요.</p>
             </div>
           </div>
           <div class="professor-now">
-            <span class="eyebrow">교수님 보는 중</span>
+            <span class="eyebrow">교수님</span>
             <strong><i></i><span id="professorFile">없음</span></strong>
           </div>
         </header>
 
         <div class="empty-state" id="emptyState">
           <span aria-hidden="true">{ }</span>
-          <h2>아직 공유된 파일이 없습니다</h2>
-          <p>교수님이 방송을 시작하면 코드가 여기에 나타납니다.</p>
+          <h2>공유된 파일이 없어요</h2>
+          <p>교수님이 시작하면 코드가 나타나요.</p>
         </div>
         <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" tabindex="0" hidden>
           <div class="code-lines" id="codeLines"></div>
         </div>
 
         <footer class="statusbar">
-          <span class="status-live"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 확인 중</span></span>
+          <span class="status-live"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 중</span></span>
           <span class="status-meta" id="language">Text</span>
           <span class="status-meta" id="lineCount">0줄</span>
           <div class="viewer-tools">
@@ -86,13 +85,13 @@
 
       <aside class="file-panel" id="filePanel">
         <div class="panel-heading">
-          <div><span class="eyebrow">이번 수업</span><h2>공유 파일</h2></div>
+          <h2>공유 파일</h2>
           <span class="file-count" id="fileCount">0</span>
         </div>
         <nav class="file-list" id="fileList" aria-label="공유 파일 목록"></nav>
         <div class="follow-note" id="followNote" hidden>
           <span aria-hidden="true">↗</span>
-          <div><strong>각자 원하는 파일을 볼 수 있어요</strong><p>교수님이 다른 파일로 이동해도 내 화면은 그대로 유지됩니다.</p></div>
+          <div><strong>파일을 골라서 봐요</strong><p>교수님이 옮겨도 내 화면은 그대로예요.</p></div>
           <button class="note-close" id="dismissNote" type="button" aria-label="안내 닫기">×</button>
         </div>
       </aside>
@@ -107,12 +106,12 @@
     <form class="gate-card" id="joinForm">
       <span class="brand-mark" aria-hidden="true">C</span>
       <span class="eyebrow">Classroom Live</span>
-      <h1>수업에 참여하기</h1>
-      <p>교수님 화면에 표시된 6자리 PIN을 입력하세요.</p>
-      <label for="pinInput">수업 PIN</label>
+      <h1>수업 참여</h1>
+      <p>교수님 화면의 6자리 PIN을 입력해 주세요.</p>
+      <label for="pinInput">PIN</label>
       <input id="pinInput" name="pin" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" placeholder="000000" required>
       <p class="gate-error" id="gateError" role="alert"></p>
-      <button class="primary-button" type="submit">입장하기</button>
+      <button class="primary-button" type="submit">입장</button>
     </form>
   </div>
 </body>

@@ -83,7 +83,7 @@ namespace ClassroomLive.Extension
                 var update = CaptureActiveFile(includeContent: true);
                 if (update == null)
                 {
-                    SetStatus("Classroom Live: 공유할 코드 파일을 선택해주세요.");
+                    SetStatus("Classroom Live · 코드 파일을 선택해 주세요");
                     return;
                 }
 
@@ -95,7 +95,7 @@ namespace ClassroomLive.Extension
                     update.Action = "unshare";
                     update.Content = null;
                     await PostAsync(update);
-                    SetStatus("Classroom Live: " + Path.GetFileName(update.FilePath) + " 공유 해제");
+                    SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유 해제");
                 }
                 else
                 {
@@ -103,8 +103,8 @@ namespace ClassroomLive.Extension
                     update.Action = "share";
                     var result = await PostAsync(update);
                     SetStatus(result.Status == HttpStatusCode.OK
-                        ? "Classroom Live: " + Path.GetFileName(update.FilePath) + " 공유 등록"
-                        : "Classroom Live: 파일은 등록됨 · ClassroomLive.exe 실행 대기 중");
+                        ? "Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유"
+                        : "Classroom Live · 호스트 실행 대기");
                 }
             });
         }
@@ -154,7 +154,7 @@ namespace ClassroomLive.Extension
                 sharedFiles.Add(update.FilePath);
                 update.Action = "share";
                 await PostAsync(update);
-                SetStatus("Classroom Live: " + Path.GetFileName(path) + " 공유 등록 (교수 화면)");
+                SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유");
             }
             else if (command == "unshare" && sharedFiles.Remove(path))
             {
@@ -163,7 +163,7 @@ namespace ClassroomLive.Extension
                 update.Action = "unshare";
                 update.Content = null;
                 await PostAsync(update);
-                SetStatus("Classroom Live: " + Path.GetFileName(path) + " 공유 해제 (교수 화면)");
+                SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유 해제");
             }
         }
 

@@ -76,10 +76,10 @@
   $("fontSmaller").addEventListener("click", () => stepFont(-1));
   $("fontLarger").addEventListener("click", () => stepFont(1));
   $("copyCode").addEventListener("click", async () => {
-    if (!currentContent) return notify("복사할 코드가 없습니다.");
+    if (!currentContent) return notify("복사할 코드가 없어요");
     notify(await copyText(currentContent)
-      ? "코드를 복사했습니다."
-      : "복사하지 못했습니다. 직접 선택해서 복사해주세요.");
+      ? "코드를 복사했어요"
+      : "복사하지 못했어요. 직접 선택해 주세요");
   });
   $("followProfessor").addEventListener("click", () => setFollowing(!following));
 
@@ -97,7 +97,7 @@
     if (!url) return;
     const button = $("copyLink");
     button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
-    setTimeout(() => { button.textContent = "학생 주소 복사"; }, 1200);
+    setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
   });
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
@@ -110,10 +110,10 @@
         body: JSON.stringify({ enabled }),
       });
       notify(response.ok
-        ? (enabled ? "공유했습니다." : "공유를 해제했습니다.")
-        : "요청에 실패했습니다.");
+        ? (enabled ? "공유했어요" : "공유를 해제했어요")
+        : "요청에 실패했어요");
     } catch {
-      notify("Visual Studio 확장에 연결하지 못했습니다.");
+      notify("확장에 연결하지 못했어요");
     } finally {
       button.disabled = false;
     }
@@ -122,28 +122,28 @@
 
   $("shutdown").addEventListener("click", async () => {
     const student = latestHostState?.classroom?.viewers ?? 0;
-    const warning = student > 0 ? ` 지금 ${student}명이 보고 있습니다.` : "";
-    if (!await confirmPopup(`수업을 끝내고 서버를 종료할까요?${warning}`, "종료")) return;
+    const warning = student > 0 ? ` 지금 ${student}명이 보고 있어요.` : "";
+    if (!await confirmPopup(`수업을 종료할까요?${warning}`, "종료")) return;
 
     shuttingDown = true;
     try {
       await fetch("/api/host/shutdown", { method: "POST", headers: { "X-Admin-Token": adminToken } });
     } catch { /* 종료 중에 연결이 끊기는 것은 정상이다. */ }
     // 자동으로 사라지면 안 된다. 종료됐다는 사실이 화면에 남아 있어야 한다.
-    popup("수업을 종료했습니다. 이 탭은 닫으셔도 됩니다.", [{ label: "확인" }]);
-    setConnection("종료됨", "paused");
-    setText($("hostStatus"), "종료됨");
+    popup("종료했어요. 탭을 닫아도 돼요", [{ label: "확인" }]);
+    setConnection("종료", "paused");
+    setText($("hostStatus"), "종료");
   });
 
   $("allowFirewall").addEventListener("click", async () => {
     const button = $("allowFirewall");
     button.disabled = true;
-    button.textContent = "권한 요청 중";
+    button.textContent = "요청 중";
     try {
       const response = await fetch("/api/host/firewall", {
         method: "POST", headers: { "X-Admin-Token": adminToken },
       });
-      button.textContent = response.ok ? "방화벽 허용됨" : "다시 시도";
+      button.textContent = response.ok ? "허용됨" : "다시 시도";
     } catch {
       button.textContent = "다시 시도";
     } finally {
@@ -298,13 +298,13 @@
       if (!response.ok) {
         if (!isHost && response.status === 429) {
           blockedUntil = Date.now() + 60_000;
-          showGate("PIN 시도가 너무 많습니다. 1분 뒤에 다시 시도해주세요.");
+          showGate("시도가 너무 많아요. 1분 뒤에 다시 해주세요");
         } else if (!isHost && response.status === 401) {
           pin = "";
           sessionStorage.removeItem("classroom-live:pin");
-          showGate("PIN이 맞지 않습니다.");
+          showGate("PIN이 맞지 않아요");
         }
-        setConnection("연결 대기", "waiting");
+        setConnection("끊김", "waiting");
         return;
       }
 
@@ -314,8 +314,8 @@
       $("gate").hidden = true;
       render(classroom, payload);
     } catch {
-      setConnection("재연결 중", "waiting");
-      setText($("syncStatus"), "서버 연결 대기 중");
+      setConnection("연결 중", "waiting");
+      setText($("syncStatus"), "연결 끊김");
     } finally {
       requestRunning = false;
     }
@@ -326,7 +326,7 @@
 
     // 보던 파일이 사라졌으면 말없이 갈아치우지 않고 알려준다.
     if (selectedId && !files.some((file) => file.id === selectedId)) {
-      if (selectedName) notify(`${selectedName} 공유가 해제되어 다른 파일로 이동했습니다.`);
+      if (selectedName) notify(`${selectedName} 공유가 끝나 다른 파일로 옮겼어요`);
       selectedId = classroom.professorActiveId || files[0]?.id || "";
     } else if (!selectedId) {
       selectedId = classroom.professorActiveId || files[0]?.id || "";
@@ -342,14 +342,14 @@
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
-    const professorName = classroom.professorActiveName || professor?.name || (live ? "선택 파일 없음" : "화면 고정됨");
+    const professorName = classroom.professorActiveName || professor?.name || (live ? "없음" : "멈춤");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
 
     setText($("syncStatus"), live
-      ? "실시간 동기화"
-      : isHost ? "화면 고정 중 · 학생에게는 마지막 화면이 보입니다" : "화면 고정됨 · 마지막 상태");
-    setConnection(live ? "LIVE" : "고정됨", live ? "live" : "paused");
+      ? "실시간"
+      : isHost ? "멈춤 · 학생은 마지막 화면을 봐요" : "멈춤 · 마지막 화면");
+    setConnection(live ? "실시간" : "멈춤", live ? "live" : "paused");
 
     if (selected) {
       setText($("fileName"), selected.name);
@@ -362,9 +362,9 @@
       $("emptyState").hidden = true;
       $("codeScroll").hidden = false;
     } else {
-      setText($("fileName"), "공유된 파일 없음");
-      setTitle($("fileName"), "공유된 파일 없음");
-      setText($("filePath"), "교수님이 파일을 공유하면 여기에 표시됩니다.");
+      setText($("fileName"), "파일 없음");
+      setTitle($("fileName"), "파일 없음");
+      setText($("filePath"), "교수님이 공유하면 여기에 나타나요.");
       setTitle($("filePath"), "");
       setText($("fileType"), "···");
       setText($("language"), "Text");
@@ -399,8 +399,8 @@
       return;
     }
 
-    setText(button, following ? `따라가는 중 ${line}줄` : `교수님 ${line}줄`);
-    setTitle(button, following ? "따라가기 끄기" : "교수님이 보고 있는 줄로 이동하고 계속 따라갑니다");
+    setText(button, following ? "따라가는 중" : "따라가기");
+    setTitle(button, following ? "따라가기 끄기" : `교수님이 보는 ${line}줄로 이동하고 계속 따라갑니다`);
     if (following && line !== followedLine) {
       followedLine = line;
       scrollToLine(line);
@@ -666,7 +666,7 @@ while with yield None True False
 
   function renderHost(payload) {
     setText($("pinValue"), payload.pin);
-    setText($("toggleBroadcast"), payload.broadcasting ? "화면 고정" : "방송 시작");
+    setText($("toggleBroadcast"), payload.broadcasting ? "멈춤" : "시작");
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
@@ -679,8 +679,8 @@ while with yield None True False
     const shared = Boolean(payload.currentFileShared);
     setText(button, shared ? `${current} 공유 해제` : `${current} 공유`);
     setTitle(button, shared
-      ? "학생 화면에서 이 파일을 내립니다 (Ctrl+Alt+L과 같음)"
-      : "Visual Studio에서 열려 있는 이 파일을 공유합니다 (Ctrl+Alt+L과 같음)");
+      ? "학생 화면에서 내립니다 (Ctrl+Alt+L)"
+      : "학생에게 이 파일을 보여줍니다 (Ctrl+Alt+L)");
     button.classList.toggle("is-active", shared);
     button.dataset.shared = shared ? "1" : "0";
   }
