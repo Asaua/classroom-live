@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="교수님의 코드를 같은 교실에서 실시간으로 확인하세요.">
+  <title>Classroom Live</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <div>
+          <div class="brand">Classroom Live</div>
+          <div class="class-name" id="className">수업 연결 중</div>
+        </div>
+      </div>
+      <div class="session-summary">
+        <span class="connection is-waiting" id="connection"><i></i><b>연결 중</b></span>
+        <span class="viewer-count"><b id="viewerCount">0</b>명 접속 중</span>
+        <button class="mobile-files" id="mobileFiles" type="button" aria-label="공유 파일 열기">파일 <span id="mobileFileCount">0</span></button>
+      </div>
+    </header>
+
+    <section class="host-controls" id="hostControls" hidden>
+      <div class="host-state">
+        <span class="eyebrow">교수 모드</span>
+        <strong id="hostStatus">Visual Studio 연결 확인 중</strong>
+        <span class="pin">학생 PIN <b id="pinValue">------</b></span>
+      </div>
+      <div class="host-actions">
+        <button class="secondary-button" id="allowFirewall" type="button">방화벽 허용</button>
+        <button class="secondary-button" id="copyLink" type="button">학생 주소 복사</button>
+        <button class="primary-button" id="toggleBroadcast" type="button">방송 시작</button>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <article class="editor-card">
+        <header class="editor-header">
+          <div class="file-heading">
+            <span class="file-type" id="fileType">···</span>
+            <div>
+              <div class="file-title-row">
+                <h1 id="fileName">공유된 파일 없음</h1>
+                <span>내 화면</span>
+              </div>
+              <p id="filePath">교수님이 파일을 공유하면 여기에 표시됩니다.</p>
+            </div>
+          </div>
+          <div class="professor-now">
+            <span class="eyebrow">교수님 보는 중</span>
+            <strong><i></i><span id="professorFile">없음</span></strong>
+          </div>
+        </header>
+
+        <div class="empty-state" id="emptyState">
+          <span aria-hidden="true">{ }</span>
+          <h2>아직 공유된 파일이 없습니다</h2>
+          <p>교수님이 방송을 시작하면 코드가 여기에 나타납니다.</p>
+        </div>
+        <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" hidden>
+          <pre class="code-gutter" id="codeGutter" aria-hidden="true"></pre>
+          <pre class="code-content"><code id="codeContent"></code></pre>
+        </div>
+
+        <footer class="statusbar">
+          <span><i class="status-dot"></i><span id="syncStatus">연결 확인 중</span></span>
+          <span id="language">Text</span>
+          <span>UTF-8</span>
+          <span id="lineCount">0줄</span>
+        </footer>
+      </article>
+
+      <aside class="file-panel" id="filePanel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">이번 수업</span><h2>공유 파일</h2></div>
+          <span class="file-count" id="fileCount">0</span>
+        </div>
+        <nav class="file-list" id="fileList" aria-label="공유 파일 목록"></nav>
+        <div class="follow-note">
+          <span aria-hidden="true">↗</span>
+          <div><strong>각자 원하는 파일을 볼 수 있어요</strong><p>교수님이 다른 파일로 이동해도 내 화면은 그대로 유지됩니다.</p></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <button class="backdrop" id="backdrop" type="button" aria-label="파일 목록 닫기" hidden></button>
+
+  <div class="gate" id="gate" hidden>
+    <form class="gate-card" id="joinForm">
+      <span class="brand-mark" aria-hidden="true">C</span>
+      <span class="eyebrow">Classroom Live</span>
+      <h1>수업에 참여하기</h1>
+      <p>교수님 화면에 표시된 6자리 PIN을 입력하세요.</p>
+      <label for="pinInput">수업 PIN</label>
+      <input id="pinInput" name="pin" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" placeholder="000000" required>
+      <p class="gate-error" id="gateError" role="alert"></p>
+      <button class="primary-button" type="submit">입장하기</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidClassroomLivePackage">
+    <Groups>
+      <Group guid="guidClassroomLiveCommandSet" id="ClassroomLiveGroup" priority="0x0700">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+    <Buttons>
+      <Button guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" priority="0x0100" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveGroup" />
+        <CommandFlag>TextChanges</CommandFlag>
+        <Strings>
+          <ButtonText>Classroom Live: 현재 파일 공유/해제</ButtonText>
+          <CommandName>ClassroomLive.ToggleCurrentFile</CommandName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <KeyBindings>
+    <KeyBinding guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" editor="guidVSStd97" key1="L" mod1="CONTROL" mod2="ALT" />
+  </KeyBindings>
+
+  <Symbols>
+    <GuidSymbol name="guidClassroomLivePackage" value="{A58CD6A3-33DC-4901-90A2-192C7615B45D}" />
+    <GuidSymbol name="guidClassroomLiveCommandSet" value="{0FC38C23-09B7-4C95-89F5-BEB7321757E4}">
+      <IDSymbol name="ClassroomLiveGroup" value="0x1020" />
+      <IDSymbol name="ToggleShareCommand" value="0x0100" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/host/">
+    <Project Path="host/ClassroomLive.Host/ClassroomLive.Host.csproj" />
+  </Folder>
+</Solution>
