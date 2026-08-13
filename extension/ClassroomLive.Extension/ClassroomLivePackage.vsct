@@ -3,33 +3,95 @@
   <Extern href="stdidcmd.h" />
   <Extern href="vsshlids.h" />
 
+  <!--
+    단축키는 하나도 넣지 않는다. 기본값 없이 두고, 필요한 사람이
+    도구 > 옵션 > 환경 > 키보드에서 아래 CommandName으로 직접 지정한다.
+    지정 가능한 것은 TogglePause, ToggleShare, ToggleHide 세 가지다.
+  -->
   <Commands package="guidClassroomLivePackage">
-    <Groups>
-      <Group guid="guidClassroomLiveCommandSet" id="ClassroomLiveGroup" priority="0x0700">
+    <Menus>
+      <Menu guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" priority="0x0700" type="Menu">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+        <Strings>
+          <ButtonText>Classroom Live</ButtonText>
+          <CommandName>Classroom Live</CommandName>
+        </Strings>
+      </Menu>
+    </Menus>
+
+    <Groups>
+      <!-- 수업 자체를 켜고 끄는 것 -->
+      <Group guid="guidClassroomLiveCommandSet" id="SessionGroup" priority="0x0100">
+        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" />
+      </Group>
+      <!-- 지금 열려 있는 파일에 대한 것 -->
+      <Group guid="guidClassroomLiveCommandSet" id="FileGroup" priority="0x0200">
+        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveMenu" />
       </Group>
     </Groups>
+
     <Buttons>
-      <Button guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" priority="0x0100" type="Button">
-        <Parent guid="guidClassroomLiveCommandSet" id="ClassroomLiveGroup" />
-        <CommandFlag>TextChanges</CommandFlag>
+      <Button guid="guidClassroomLiveCommandSet" id="StartCommand" priority="0x0100" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
+        <CommandFlag>DefaultDisabled</CommandFlag>
         <Strings>
-          <ButtonText>Classroom Live: 현재 파일 공유/해제</ButtonText>
-          <CommandName>ClassroomLive.ToggleCurrentFile</CommandName>
+          <ButtonText>실행</ButtonText>
+          <CommandName>ClassroomLive.Start</CommandName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClassroomLiveCommandSet" id="StopCommand" priority="0x0200" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>종료</ButtonText>
+          <CommandName>ClassroomLive.Stop</CommandName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClassroomLiveCommandSet" id="TogglePauseCommand" priority="0x0300" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="SessionGroup" />
+        <CommandFlag>TextChanges</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>멈춤</ButtonText>
+          <CommandName>ClassroomLive.TogglePause</CommandName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" priority="0x0100" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="FileGroup" />
+        <CommandFlag>TextChanges</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>현재 파일 공유</ButtonText>
+          <CommandName>ClassroomLive.ToggleShare</CommandName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClassroomLiveCommandSet" id="ToggleHideCommand" priority="0x0200" type="Button">
+        <Parent guid="guidClassroomLiveCommandSet" id="FileGroup" />
+        <CommandFlag>TextChanges</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>현재 파일 숨김</ButtonText>
+          <CommandName>ClassroomLive.ToggleHide</CommandName>
         </Strings>
       </Button>
     </Buttons>
   </Commands>
 
-  <KeyBindings>
-    <KeyBinding guid="guidClassroomLiveCommandSet" id="ToggleShareCommand" editor="guidVSStd97" key1="L" mod1="CONTROL" mod2="ALT" />
-  </KeyBindings>
-
   <Symbols>
     <GuidSymbol name="guidClassroomLivePackage" value="{A58CD6A3-33DC-4901-90A2-192C7615B45D}" />
     <GuidSymbol name="guidClassroomLiveCommandSet" value="{0FC38C23-09B7-4C95-89F5-BEB7321757E4}">
-      <IDSymbol name="ClassroomLiveGroup" value="0x1020" />
+      <IDSymbol name="ClassroomLiveMenu" value="0x1000" />
+      <IDSymbol name="SessionGroup" value="0x1020" />
+      <IDSymbol name="FileGroup" value="0x1021" />
       <IDSymbol name="ToggleShareCommand" value="0x0100" />
+      <IDSymbol name="StartCommand" value="0x0101" />
+      <IDSymbol name="StopCommand" value="0x0102" />
+      <IDSymbol name="TogglePauseCommand" value="0x0103" />
+      <IDSymbol name="ToggleHideCommand" value="0x0104" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

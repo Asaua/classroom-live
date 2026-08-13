@@ -102,6 +102,9 @@
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
     const enabled = button.dataset.shared !== "1";
+    // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
+    if (enabled && button.dataset.shareable !== "1")
+      return notify("추가할 수 없는 타입의 파일이에요");
     button.disabled = true;
     try {
       const response = await fetch("/api/host/share", {
@@ -118,6 +121,12 @@
       button.disabled = false;
     }
     await refresh();
+  });
+
+  $("toggleHide").addEventListener("click", async () => {
+    const id = $("toggleHide").dataset.fileId;
+    if (!id) return;
+    await setHidden(id, $("toggleHide").dataset.hidden !== "1");
   });
 
   $("shutdown").addEventListener("click", async () => {
@@ -150,6 +159,23 @@
       button.disabled = false;
     }
   });
+
+  // 숨김은 되돌릴 수 있다. 공유 해제(×)와 달리 목록에는 남는다.
+  async function setHidden(id, hidden) {
+    try {
+      const response = await fetch(`/api/host/files/${encodeURIComponent(id)}/hidden`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+        body: JSON.stringify({ hidden }),
+      });
+      notify(response.ok
+        ? (hidden ? "학생 화면에서 숨겼어요" : "다시 보이게 했어요")
+        : "요청에 실패했어요");
+    } catch {
+      notify("요청에 실패했어요");
+    }
+    await refresh();
+  }
 
   function dismissNote() {
     $("followNote").hidden = true;
@@ -628,7 +654,17 @@ while with yield None True False
     item.append(open);
 
     let remove = null;
+    let hide = null;
     if (isHost) {
+      hide = document.createElement("button");
+      hide.type = "button";
+      hide.className = "hide-file";
+      hide.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await setHidden(file.id, hide.dataset.hidden !== "1");
+      });
+      item.append(hide);
+
       remove = document.createElement("button");
       remove.type = "button";
       remove.className = "remove-file";
@@ -643,15 +679,15 @@ while with yield None True False
       item.append(remove);
     }
 
-    item.parts = { open, icon, name, updated, badge, remove };
+    item.parts = { open, icon, name, updated, badge, remove, hide };
     return item;
   }
 
   function updateFileItem(item, file, professorActiveId) {
-    const { open, icon, name, updated, badge, remove } = item.parts;
+    const { open, icon, name, updated, badge, remove, hide } = item.parts;
     const isSelected = file.id === selectedId;
 
-    const className = `file-item${isSelected ? " is-selected" : ""}`;
+    const className = `file-item${isSelected ? " is-selected" : ""}${file.hidden ? " is-hidden-file" : ""}`;
     if (item.className !== className) item.className = className;
     if (isSelected) open.setAttribute("aria-current", "page");
     else open.removeAttribute("aria-current");
@@ -661,7 +697,14 @@ while with yield None True False
     setText(name, file.name);
     setText(updated, relativeTime(file.updatedAt));
     badge.hidden = file.id !== professorActiveId;
-    if (remove) remove.setAttribute("aria-label", `${file.name} 공유 목록에서 제거`);
+    if (remove) remove.setAttribute("aria-label", `${file.name} 공유 해제`);
+    if (hide) {
+      hide.dataset.hidden = file.hidden ? "1" : "0";
+      setText(hide, file.hidden ? "보임" : "숨김");
+      hide.setAttribute("aria-label",
+        file.hidden ? `${file.name} 다시 보이기` : `${file.name} 학생 화면에서 숨기기`);
+      hide.classList.toggle("is-active", Boolean(file.hidden));
+    }
   }
 
   function renderHost(payload) {
@@ -670,19 +713,39 @@ while with yield None True False
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
-    // Visual Studio로 돌아가 단축키를 누르지 않아도 여기서 공유를 켜고 끌 수 있다.
-    const button = $("toggleShare");
+    // Visual Studio로 돌아가지 않아도 여기서 공유와 숨김을 켜고 끌 수 있다.
+    const share = $("toggleShare");
+    const hide = $("toggleHide");
     const current = payload.currentFileName;
-    button.hidden = !current;
+    share.hidden = !current;
+    hide.hidden = !current || !payload.currentFileShared;
     if (!current) return;
 
     const shared = Boolean(payload.currentFileShared);
-    setText(button, shared ? `${current} 공유 해제` : `${current} 공유`);
-    setTitle(button, shared
-      ? "학생 화면에서 내립니다 (Ctrl+Alt+L)"
-      : "학생에게 이 파일을 보여줍니다 (Ctrl+Alt+L)");
-    button.classList.toggle("is-active", shared);
-    button.dataset.shared = shared ? "1" : "0";
+    const shareable = Boolean(payload.currentFileShareable);
+    setText(share, shared ? `${current} 공유 해제` : `${current} 공유`);
+    setTitle(share, shared
+      ? "학생 목록에서 뺍니다"
+      : shareable ? "학생에게 이 파일을 보여줍니다" : "공유할 수 없는 타입의 파일입니다");
+    share.classList.toggle("is-active", shared);
+    share.classList.toggle("is-blocked", !shared && !shareable);
+    share.dataset.shared = shared ? "1" : "0";
+    share.dataset.shareable = shareable ? "1" : "0";
+
+    const hidden = Boolean(payload.currentFileHidden);
+    setText(hide, hidden ? "다시 보이기" : "숨김");
+    setTitle(hide, hidden
+      ? "학생 화면에 다시 보이게 합니다"
+      : "목록에는 두고 학생 화면에서만 감춥니다");
+    hide.classList.toggle("is-active", hidden);
+    hide.dataset.hidden = hidden ? "1" : "0";
+    hide.dataset.fileId = currentFileId(payload);
+  }
+
+  // 현재 파일의 id는 목록에서 이름으로 찾는다. 교수 화면은 숨긴 파일까지 받는다.
+  function currentFileId(payload) {
+    const files = payload.classroom?.files ?? [];
+    return files.find((file) => file.name === payload.currentFileName)?.id ?? "";
   }
 
   function setConnection(text, kind) {

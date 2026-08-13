@@ -178,13 +178,13 @@ app.MapPost("/api/extension/update", (HttpContext context, ExtensionUpdateReques
     if (!session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault()))
         return Results.NotFound();
 
-    // 교수가 ×로 내린 파일이면 409로 알려준다. 확장이 이걸 받아 공유 목록을 정리하므로
-    // 단축키를 두 번 눌러야 다시 공유되던 문제가 사라진다.
-    if (session.ApplyExtensionUpdate(request) == ExtensionUpdateOutcome.Suppressed)
+    // 교수가 목록에서 뺀 파일이면 409로 알려준다. 확장이 이걸 받아 공유 목록을 정리하므로
+    // 해제한 파일이 다음 동기화에 되살아나지 않는다.
+    if (session.ApplyExtensionUpdate(request) == ExtensionUpdateOutcome.Unshared)
         return Results.Conflict();
 
-    // 교수 화면에서 누른 "현재 파일 공유"를 응답에 실어 보낸다.
-    return Results.Ok(new { command = session.TakePendingCommand() });
+    // 교수 화면에서 누른 명령과 Visual Studio 메뉴가 쓸 상태를 함께 돌려준다.
+    return Results.Json(session.BuildReply());
 });
 
 app.MapDelete("/api/host/files/{id}", (HttpContext context, string id, ClassroomSession session) =>
@@ -192,9 +192,53 @@ app.MapDelete("/api/host/files/{id}", (HttpContext context, string id, Classroom
     if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
         return Results.Unauthorized();
 
-    session.Remove(id);
+    session.Unshare(id);
     return Results.Ok();
 });
+
+app.MapPost("/api/host/files/{id}/hidden", (HttpContext context, string id, HiddenRequest request,
+    ClassroomSession session) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    // 숨김은 되돌릴 수 있다. 공유 해제(DELETE)와 달리 목록에는 남는다.
+    return session.SetHidden(id, request.Hidden) ? Results.Ok() : Results.NotFound();
+});
+
+// --- Visual Studio 확장이 직접 부르는 조작 --------------------------------
+// 교수 화면과 같은 일을 할 수 있어야 한다. 관리자 토큰을 확장에 넘기지 않으려고
+// 확장 토큰으로 인증하는 별도 경로를 둔다. 루프백에서만 받는다.
+
+app.MapPost("/api/extension/broadcast", (HttpContext context, BroadcastRequest request,
+    ClassroomSession session) =>
+{
+    if (!IsLocalExtension(context, session)) return Results.NotFound();
+
+    session.SetBroadcasting(request.Enabled);
+    return Results.Ok();
+});
+
+app.MapPost("/api/extension/shutdown", (HttpContext context, ClassroomSession session,
+    IHostApplicationLifetime lifetime) =>
+{
+    if (!IsLocalExtension(context, session)) return Results.NotFound();
+
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(300);
+        lifetime.StopApplication();
+    });
+    return Results.Ok();
+});
+
+// 확장이 "실행"으로 호스트를 켜려면 실행 파일 위치를 알아야 한다.
+// 핸드셰이크 파일과 달리 종료해도 남겨둔다.
+try
+{
+    if (Environment.ProcessPath is { } exePath) HostHandshake.RememberInstall(exePath);
+}
+catch { /* 위치를 못 남겨도 수업 진행에는 지장이 없다. */ }
 
 app.Lifetime.ApplicationStarted.Register(() =>
 {
@@ -311,7 +355,15 @@ static bool IsPrivateLan(IPAddress address)
            bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
 }
 
+static bool IsLocalExtension(HttpContext context, ClassroomSession session)
+{
+    var address = context.Connection.RemoteIpAddress;
+    return address is not null && IPAddress.IsLoopback(address) &&
+           session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault());
+}
+
 record BroadcastRequest(bool Enabled);
+record HiddenRequest(bool Hidden);
 record ExtensionUpdateRequest(
     string Action,
     string? FilePath,

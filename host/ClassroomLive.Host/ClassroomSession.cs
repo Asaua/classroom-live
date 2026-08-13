@@ -10,13 +10,15 @@ sealed class ClassroomSession
     private readonly object _gate = new();
     private readonly Dictionary<string, SharedFile> _files = [];
     private readonly Dictionary<string, DateTimeOffset> _viewers = [];
-    private readonly HashSet<string> _suppressedFiles = [];
+    // 교수가 목록에서 내린 파일. 확장이 아직 동기화 중이면 409로 알려 되살아나지 않게 한다.
+    private readonly HashSet<string> _unsharedFiles = [];
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
     private string? _professorActiveId;
     private string? _professorActiveName;
     private int? _professorActiveLine;
     private string? _currentFileName;
-    private bool _currentFileShared;
+    private string? _currentFileId;
+    private bool _currentFileShareable;
     private string? _pendingCommand;
     private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
@@ -100,10 +102,24 @@ sealed class ClassroomSession
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
 
-            // 교수 화면의 "현재 파일 공유" 버튼이 쓸 정보. 멈춤 중에도 최신으로 둔다.
-            // 이건 표시용일 뿐이고 학생에게 나가는 내용에는 영향을 주지 않는다.
-            _currentFileName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
-            _currentFileShared = hasSafeActiveFile && action is "share" or "sync";
+            // 교수 화면 버튼과 Visual Studio 메뉴가 쓸 정보. 멈춤 중에도 최신으로 둔다.
+            // 공유할 수 없는 파일도 이름은 남긴다. 그래야 왜 안 되는지 안내할 수 있다.
+            _currentFileName = string.IsNullOrWhiteSpace(request.FilePath)
+                ? null
+                : Path.GetFileName(request.FilePath);
+            _currentFileShareable = hasSafeActiveFile;
+            _currentFileId = activeId;
+
+            // 숨김은 되돌릴 수 있다. 파일은 목록에 남고 학생 화면에서만 빠진다.
+            if (action is "hide" or "unhide")
+            {
+                if (activeId is not null && _files.TryGetValue(activeId, out var target))
+                {
+                    _files[activeId] = target with { Hidden = action == "hide" };
+                    _visualStudioStatus = target.Name + (action == "hide" ? " · 숨김" : " · 다시 보임");
+                }
+                return ExtensionUpdateOutcome.Accepted;
+            }
 
             if (action == "unshare")
             {
@@ -111,7 +127,7 @@ sealed class ClassroomSession
                 {
                     var id = FileId(request.FilePath);
                     _files.Remove(id);
-                    _suppressedFiles.Remove(id);
+                    _unsharedFiles.Remove(id);
                     if (_professorActiveId == id) ClearProfessorPointer();
                 }
                 _visualStudioStatus = "공유 해제됨";
@@ -126,7 +142,7 @@ sealed class ClassroomSession
                 return ExtensionUpdateOutcome.Accepted;
             }
 
-            if (action == "share" && activeId is not null) _suppressedFiles.Remove(activeId);
+            if (action == "share" && activeId is not null) _unsharedFiles.Remove(activeId);
 
             if (action is not ("share" or "sync"))
             {
@@ -146,11 +162,11 @@ sealed class ClassroomSession
                 return ExtensionUpdateOutcome.Accepted;
             }
 
-            if (_suppressedFiles.Contains(activeId!))
+            if (_unsharedFiles.Contains(activeId!))
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = "내려둔 파일";
-                return ExtensionUpdateOutcome.Suppressed;
+                _visualStudioStatus = "공유 해제된 파일";
+                return ExtensionUpdateOutcome.Unshared;
             }
 
             UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
@@ -186,7 +202,7 @@ sealed class ClassroomSession
         else
         {
             _files[id] = new SharedFile(id, Path.GetFileName(normalizedPath), relativePath,
-                SecurityRules.LanguageFor(normalizedPath), now, content);
+                SecurityRules.LanguageFor(normalizedPath), now, content, Hidden: false);
         }
 
         TrimOldFiles();
@@ -201,12 +217,32 @@ sealed class ClassroomSession
     /// 교수 화면에서 현재 파일을 공유/해제하도록 요청한다. 확장이 다음 폴링(최대 0.6초)에서
     /// 가져가 실행한다. 호스트에서 확장으로 가는 유일한 통로다.
     /// </summary>
-    public void RequestShare(bool enabled)
+    public void RequestShare(bool enabled) => RequestCommand(enabled ? "share" : "unshare");
+
+    /// <summary>확장이 다음 폴링에서 가져갈 명령을 남긴다.</summary>
+    public void RequestCommand(string command)
     {
         lock (_gate)
         {
-            _pendingCommand = enabled ? "share" : "unshare";
+            _pendingCommand = command;
             _pendingCommandAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    /// <summary>
+    /// 확장이 폴링할 때마다 돌려주는 상태. Visual Studio 메뉴가 이걸로 글자와
+    /// 활성 여부를 정한다. 별도 조회 없이 기존 통로에 실어 보낸다.
+    /// </summary>
+    public ExtensionReply BuildReply()
+    {
+        lock (_gate)
+        {
+            return new ExtensionReply(
+                TakePendingCommand(),
+                _broadcasting,
+                _currentFileShareable,
+                CurrentFileIsShared(),
+                CurrentFileIsHidden());
         }
     }
 
@@ -251,15 +287,28 @@ sealed class ClassroomSession
         lock (_gate) _viewers[viewerId] = DateTimeOffset.UtcNow;
     }
 
-    public void Remove(string id)
+    /// <summary>목록에서 완전히 뺀다. 되살리려면 다시 공유해야 한다.</summary>
+    public void Unshare(string id)
     {
         lock (_gate)
         {
-            // 한 수업에서 이만큼 숨길 일은 없다. 무한정 쌓이는 것만 막는다.
-            if (_suppressedFiles.Count > 500) _suppressedFiles.Clear();
-            _suppressedFiles.Add(id);
+            // 한 수업에서 이만큼 내릴 일은 없다. 무한정 쌓이는 것만 막는다.
+            if (_unsharedFiles.Count > 500) _unsharedFiles.Clear();
+            _unsharedFiles.Add(id);
             _files.Remove(id);
             if (_professorActiveId == id) ClearProfessorPointer();
+        }
+    }
+
+    /// <summary>학생 화면에서만 감춘다. 목록에는 남아 있어 언제든 되돌릴 수 있다.</summary>
+    public bool SetHidden(string id, bool hidden)
+    {
+        lock (_gate)
+        {
+            if (!_files.TryGetValue(id, out var file)) return false;
+            _files[id] = file with { Hidden = hidden };
+            if (hidden && _professorActiveId == id) _professorActiveId = null;
+            return true;
         }
     }
 
@@ -268,7 +317,8 @@ sealed class ClassroomSession
         lock (_gate)
         {
             PruneViewers();
-            return Snapshot();
+            // 학생에게는 숨긴 파일을 보내지 않는다.
+            return Snapshot(file => !file.Hidden);
         }
     }
 
@@ -278,15 +328,24 @@ sealed class ClassroomSession
         {
             PruneViewers();
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
-            return new HostSnapshot(Snapshot(), _broadcasting, connected,
+            // 교수 화면은 숨긴 파일까지 봐야 되돌릴 수 있다.
+            return new HostSnapshot(Snapshot(_ => true), _broadcasting, connected,
                 connected ? _visualStudioStatus : "Visual Studio 연결 대기",
                 connected ? _currentFileName : null,
-                connected && _currentFileShared,
+                connected && _currentFileShareable,
+                connected && CurrentFileIsShared(),
+                connected && CurrentFileIsHidden(),
                 Pin, studentUrls);
         }
     }
 
-    private ClassroomSnapshot Snapshot() => new(
+    private bool CurrentFileIsShared() =>
+        _currentFileId is not null && _files.ContainsKey(_currentFileId);
+
+    private bool CurrentFileIsHidden() =>
+        _currentFileId is not null && _files.TryGetValue(_currentFileId, out var file) && file.Hidden;
+
+    private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include) => new(
         "수업 중",
         _professorActiveId,
         _professorActiveName,
@@ -295,7 +354,8 @@ sealed class ClassroomSession
         _broadcasting,
         // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
         // 학생 커서 밑에서 계속 맨 위로 튄다.
-        _files.Values.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray());
+        _files.Values.Where(include)
+            .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray());
 
     private void PruneViewers()
     {
@@ -345,13 +405,31 @@ static class HostHandshake
         try { File.Delete(FilePath); }
         catch { /* 종료 중 실패는 무시한다. */ }
     }
+
+    /// <summary>확장의 "실행"이 쓸 실행 파일 위치. 종료해도 남겨둔다.</summary>
+    public static string InstallPath { get; } = Path.Combine(
+        Path.GetDirectoryName(FilePath)!, "install.json");
+
+    public static void RememberInstall(string executablePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
+        File.WriteAllText(InstallPath, $"{{\"exe\":{System.Text.Json.JsonSerializer.Serialize(executablePath)}}}");
+    }
 }
+
+/// <summary>확장 폴링 응답. 필드 이름은 그대로 JSON 키가 된다.</summary>
+sealed record ExtensionReply(
+    string? Command,
+    bool Broadcasting,
+    bool Shareable,
+    bool Shared,
+    bool Hidden);
 
 enum ExtensionUpdateOutcome
 {
     Accepted,
-    /// <summary>교수가 화면에서 내린 파일이라 공유하지 않았다.</summary>
-    Suppressed
+    /// <summary>교수가 목록에서 내린 파일이라 공유하지 않았다. 확장에 409로 알린다.</summary>
+    Unshared
 }
 
 sealed record SharedFile(
@@ -360,7 +438,8 @@ sealed record SharedFile(
     string Path,
     string Language,
     DateTimeOffset UpdatedAt,
-    string Content);
+    string Content,
+    bool Hidden);
 
 sealed record ClassroomSnapshot(
     string ClassName,
@@ -378,7 +457,9 @@ sealed record HostSnapshot(
     string VisualStudioStatus,
     /// <summary>Visual Studio에서 지금 열려 있는 파일. 공유 여부와 무관하다.</summary>
     string? CurrentFileName,
+    bool CurrentFileShareable,
     bool CurrentFileShared,
+    bool CurrentFileHidden,
     string Pin,
     string[] StudentUrls);
 
@@ -475,9 +556,27 @@ static class SecurityRules
 
         // 교수가 ×로 내리면 확장에 409로 알려서 단축키 한 번에 다시 공유되게 한다.
         var fileId = session.GetSnapshot().Files[0].Id;
-        session.Remove(fileId);
-        Assert(session.ApplyExtensionUpdate(Sync("class Player {}", 1)) == ExtensionUpdateOutcome.Suppressed,
-            "내린 파일은 확장에 Suppressed로 알린다");
+
+        // 숨김: 학생 화면에서만 빠지고 교수 목록에는 남아 되돌릴 수 있다.
+        Assert(session.SetHidden(fileId, true), "숨김 처리 성공");
+        Assert(session.GetSnapshot().Files.Length == 0, "숨기면 학생에게 안 보인다");
+        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 1, "숨겨도 교수 목록에는 남는다");
+        Assert(session.GetHostSnapshot([]).Classroom.Files[0].Hidden, "숨김 표시가 붙는다");
+        Assert(session.SetHidden(fileId, false), "숨김 해제 성공");
+        Assert(session.GetSnapshot().Files.Length == 1, "숨김을 풀면 다시 보인다");
+        Assert(!session.SetHidden("없는id", true), "없는 파일은 숨길 수 없다");
+
+        // 확장에서 숨기고 푸는 경로도 같아야 한다.
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("hide", file, root, null, 0));
+        Assert(session.GetSnapshot().Files.Length == 0, "확장에서 숨겨도 학생에게 안 보인다");
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("unhide", file, root, null, 0));
+        Assert(session.GetSnapshot().Files.Length == 1, "확장에서 숨김을 풀 수 있다");
+
+        // 공유 해제는 목록에서 완전히 뺀다. 확장이 계속 동기화해도 되살아나면 안 된다.
+        session.Unshare(fileId);
+        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 0, "공유를 해제하면 교수 목록에서도 빠진다");
+        Assert(session.ApplyExtensionUpdate(Sync("class Player {}", 1)) == ExtensionUpdateOutcome.Unshared,
+            "해제된 파일은 확장에 409로 알린다");
         Assert(session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1))
             == ExtensionUpdateOutcome.Accepted, "다시 공유하면 정상 수락된다");
 
@@ -496,6 +595,17 @@ static class SecurityRules
         var stale = new ClassroomSession();
         stale.RequestShare(true);
         Assert(stale.TakePendingCommand(TimeSpan.FromSeconds(-1)) is null, "오래된 명령은 버린다");
+
+        // 확장 메뉴가 쓰는 상태가 그대로 전달되는지.
+        var replySession = new ClassroomSession();
+        replySession.SetBroadcasting(true);
+        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "x", 1));
+        var reply = replySession.BuildReply();
+        Assert(reply.Broadcasting && reply.Shareable && reply.Shared && !reply.Hidden, "공유 중 상태가 확장에 전달된다");
+        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("hide", file, root, null, 0));
+        Assert(replySession.BuildReply().Hidden, "숨김 상태가 확장에 전달된다");
+        replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("heartbeat", Path.Combine(root, "logo.png"), root, null, 0));
+        Assert(!replySession.BuildReply().Shareable, "공유할 수 없는 파일이면 확장이 안다");
 
         // 유휴 종료가 엉뚱할 때 서버를 내리면 수업이 끊긴다. 두 안전장치를 확인한다.
         var fresh = new ClassroomSession();
