@@ -178,6 +178,9 @@ namespace ClassroomLive.Extension
                     if (textDocument == null) return null;
                     var editPoint = textDocument.StartPoint.CreateEditPoint();
                     update.Content = editPoint.GetText(textDocument.EndPoint);
+                    // 학생이 "교수님 따라가기"로 같은 줄을 볼 수 있게 커서 위치를 함께 보낸다.
+                    try { update.ActiveLine = (int)textDocument.Selection.ActivePoint.Line; }
+                    catch { update.ActiveLine = 0; }
                 }
                 return update;
             }
@@ -295,6 +298,7 @@ namespace ClassroomLive.Extension
             [DataMember] public string FilePath { get; set; }
             [DataMember] public string SolutionRoot { get; set; }
             [DataMember] public string Content { get; set; }
+            [DataMember] public int ActiveLine { get; set; }
         }
 
         [ComImport]

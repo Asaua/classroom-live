@@ -13,10 +13,22 @@
   const adminToken = sessionStorage.getItem("classroom-live:admin") || "";
   let pin = sessionStorage.getItem("classroom-live:pin") || "";
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
+  let selectedName = "";
   let latestHostState = null;
   let requestRunning = false;
   let blockedUntil = 0;
-  let rendered = { fileId: "", content: null };
+
+  const FONT_STEPS = [11, 12.5, 14, 16, 18, 21, 24];
+  let fontIndex = clampFontIndex(Number(localStorage.getItem("classroom-live:font")));
+  let wrapEnabled = localStorage.getItem("classroom-live:wrap") === "1";
+  let following = false;
+  let followedLine = 0;
+
+  // 화면에 그려진 줄. { node, text, startState } 로 줄 단위 비교를 한다.
+  let renderedRows = [];
+  let renderedFileId = "";
+  let currentContent = "";
+  let noticeTimer = 0;
 
   // crypto.randomUUID는 보안 컨텍스트(HTTPS 또는 localhost)에서만 존재한다.
   // 학생은 http://192.168.x.x 로 접속하므로 그대로 호출하면 여기서 예외가 나고
@@ -29,6 +41,8 @@
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
+  applyWrap();
+  applyFont();
 
   $("joinForm").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -40,6 +54,22 @@
 
   $("mobileFiles").addEventListener("click", () => openFiles(true));
   $("backdrop").addEventListener("click", () => openFiles(false));
+
+  $("toggleWrap").addEventListener("click", () => {
+    wrapEnabled = !wrapEnabled;
+    localStorage.setItem("classroom-live:wrap", wrapEnabled ? "1" : "0");
+    applyWrap();
+  });
+  $("fontSmaller").addEventListener("click", () => stepFont(-1));
+  $("fontLarger").addEventListener("click", () => stepFont(1));
+  $("copyCode").addEventListener("click", async () => {
+    if (!currentContent) return notify("복사할 코드가 없습니다.");
+    notify(await copyText(currentContent)
+      ? "코드를 복사했습니다."
+      : "복사하지 못했습니다. 직접 선택해서 복사해주세요.");
+  });
+  $("followProfessor").addEventListener("click", () => setFollowing(!following));
+
   $("toggleBroadcast").addEventListener("click", async () => {
     if (!latestHostState) return;
     await fetch("/api/host/broadcast", {
@@ -52,9 +82,9 @@
   $("copyLink").addEventListener("click", async () => {
     const url = latestHostState?.studentUrls?.[0];
     if (!url) return;
-    await navigator.clipboard.writeText(url);
-    $("copyLink").textContent = "복사됨";
-    setTimeout(() => { $("copyLink").textContent = "학생 주소 복사"; }, 1200);
+    const button = $("copyLink");
+    button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
+    setTimeout(() => { button.textContent = "학생 주소 복사"; }, 1200);
   });
   $("allowFirewall").addEventListener("click", async () => {
     const button = $("allowFirewall");
@@ -84,6 +114,84 @@
 
   function setText(element, value) {
     if (element.textContent !== value) element.textContent = value;
+  }
+
+  function setTitle(element, value) {
+    if (element.getAttribute("title") !== value) element.setAttribute("title", value);
+  }
+
+  function notify(message) {
+    const notice = $("notice");
+    notice.textContent = message;
+    notice.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { notice.hidden = true; }, 3200);
+  }
+
+  // 학생은 http로 접속하므로 navigator.clipboard가 없다. crypto.randomUUID와 같은 함정이다.
+  async function copyText(text) {
+    try {
+      if (window.isSecureContext && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch { /* 아래 폴백으로 넘어간다 */ }
+
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+      document.body.append(area);
+      area.select();
+      area.setSelectionRange(0, text.length);
+      const copied = document.execCommand("copy");
+      area.remove();
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+
+  function clampFontIndex(value) {
+    const index = Number.isFinite(value) ? Math.round(value) : 1;
+    return Math.min(FONT_STEPS.length - 1, Math.max(0, index));
+  }
+
+  function stepFont(direction) {
+    fontIndex = clampFontIndex(fontIndex + direction);
+    localStorage.setItem("classroom-live:font", String(fontIndex));
+    applyFont();
+  }
+
+  function applyFont() {
+    $("codeLines").style.setProperty("--code-size", `${FONT_STEPS[fontIndex]}px`);
+    $("fontSmaller").disabled = fontIndex === 0;
+    $("fontLarger").disabled = fontIndex === FONT_STEPS.length - 1;
+  }
+
+  function applyWrap() {
+    $("codeLines").classList.toggle("is-wrapped", wrapEnabled);
+    const button = $("toggleWrap");
+    button.setAttribute("aria-pressed", String(wrapEnabled));
+    button.classList.toggle("is-active", wrapEnabled);
+  }
+
+  function setFollowing(value) {
+    following = value;
+    const button = $("followProfessor");
+    button.setAttribute("aria-pressed", String(following));
+    button.classList.toggle("is-active", following);
+    followedLine = 0;
+  }
+
+  function scrollToLine(line) {
+    const row = renderedRows[line - 1]?.node;
+    if (!row) return;
+    const scroller = $("codeScroll");
+    const target = row.offsetTop - scroller.clientHeight / 3;
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scroller.scrollTo({ top: Math.max(0, target), behavior: smooth ? "smooth" : "auto" });
   }
 
   async function refresh() {
@@ -129,53 +237,260 @@
 
   function render(classroom, payload) {
     const files = Array.isArray(classroom.files) ? classroom.files : [];
-    if (!files.some((file) => file.id === selectedId)) {
+
+    // 보던 파일이 사라졌으면 말없이 갈아치우지 않고 알려준다.
+    if (selectedId && !files.some((file) => file.id === selectedId)) {
+      if (selectedName) notify(`${selectedName} 공유가 해제되어 다른 파일로 이동했습니다.`);
+      selectedId = classroom.professorActiveId || files[0]?.id || "";
+    } else if (!selectedId) {
       selectedId = classroom.professorActiveId || files[0]?.id || "";
     }
+
     const selected = files.find((file) => file.id === selectedId);
     const professor = files.find((file) => file.id === classroom.professorActiveId);
+    selectedName = selected?.name || "";
 
+    const live = classroom.broadcasting;
     setText($("className"), classroom.className);
     setText($("viewerCount"), String(classroom.viewers));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
-    setText($("professorFile"), classroom.professorActiveName || professor?.name ||
-      (classroom.broadcasting ? "선택 파일 없음" : "방송 일시정지"));
-    setText($("syncStatus"), classroom.broadcasting
+
+    const professorName = classroom.professorActiveName || professor?.name || (live ? "선택 파일 없음" : "화면 고정됨");
+    setText($("professorFile"), professorName);
+    setTitle($("professorFile"), professor?.path || professorName);
+
+    setText($("syncStatus"), live
       ? "실시간 동기화"
-      : isHost ? "일시정지 · 학생 화면에서는 코드가 숨겨집니다" : "방송 일시정지");
-    setConnection(classroom.broadcasting ? "LIVE" : "일시정지", classroom.broadcasting ? "live" : "paused");
+      : isHost ? "화면 고정 중 · 학생에게는 마지막 화면이 보입니다" : "화면 고정됨 · 마지막 상태");
+    setConnection(live ? "LIVE" : "고정됨", live ? "live" : "paused");
 
     if (selected) {
       setText($("fileName"), selected.name);
+      setTitle($("fileName"), selected.name);
       setText($("filePath"), selected.path);
+      setTitle($("filePath"), selected.path);
       setText($("fileType"), shortLanguage(selected.language));
       setText($("language"), selected.language);
-      // 코드 본문은 실제로 바뀌었을 때만 다시 쓴다. 매번 새로 쓰면 학생이 드래그한
-      // 선택 영역과 키보드 포커스가 0.75초마다 사라져서 복사조차 못 한다.
-      if (rendered.fileId !== selected.id || rendered.content !== selected.content) {
-        const lines = selected.content.split("\n");
-        $("codeGutter").textContent = lines.map((_, index) => index + 1).join("\n");
-        $("codeContent").textContent = selected.content;
-        setText($("lineCount"), `${lines.length}줄`);
-        rendered = { fileId: selected.id, content: selected.content };
-      }
+      renderCode(selected);
       $("emptyState").hidden = true;
       $("codeScroll").hidden = false;
     } else {
       setText($("fileName"), "공유된 파일 없음");
+      setTitle($("fileName"), "공유된 파일 없음");
       setText($("filePath"), "교수님이 파일을 공유하면 여기에 표시됩니다.");
+      setTitle($("filePath"), "");
       setText($("fileType"), "···");
       setText($("language"), "Text");
       setText($("lineCount"), "0줄");
-      rendered = { fileId: "", content: null };
+      $("codeLines").replaceChildren();
+      renderedRows = [];
+      renderedFileId = "";
+      currentContent = "";
       $("emptyState").hidden = false;
       $("codeScroll").hidden = true;
     }
 
+    applyProfessorLine(classroom, selected);
     renderFiles(files, classroom.professorActiveId);
     if (isHost) renderHost(payload);
   }
+
+  // 교수가 보고 있는 줄을 표시하고, 따라가기가 켜져 있으면 그 줄로 스크롤한다.
+  function applyProfessorLine(classroom, selected) {
+    const line = Number(classroom.professorActiveLine) || 0;
+    const onSameFile = Boolean(selected) && selected.id === classroom.professorActiveId;
+    const canFollow = onSameFile && line > 0 && line <= renderedRows.length;
+
+    for (const row of document.querySelectorAll(".code-line.is-professor-line"))
+      row.classList.remove("is-professor-line");
+    if (canFollow) renderedRows[line - 1]?.node.classList.add("is-professor-line");
+
+    const button = $("followProfessor");
+    button.hidden = !canFollow;
+    if (!canFollow) {
+      if (following) setFollowing(false);
+      return;
+    }
+
+    setText(button, following ? `따라가는 중 ${line}줄` : `교수님 ${line}줄`);
+    setTitle(button, following ? "따라가기 끄기" : "교수님이 보고 있는 줄로 이동하고 계속 따라갑니다");
+    if (following && line !== followedLine) {
+      followedLine = line;
+      scrollToLine(line);
+    }
+  }
+
+  // 줄 단위로 비교해서 바뀐 줄만 다시 그린다. 파일 전체를 다시 쓰면
+  // 학생이 드래그한 선택과 키보드 포커스가 폴링할 때마다 사라진다.
+  function renderCode(file) {
+    const container = $("codeLines");
+    const lines = file.content.split("\n");
+    const highlighter = highlighterFor(file.language, lines.length);
+    currentContent = file.content;
+
+    if (file.id !== renderedFileId) {
+      container.replaceChildren();
+      renderedRows = [];
+      renderedFileId = file.id;
+      $("codeScroll").scrollTo({ top: 0, behavior: "auto" });
+    }
+
+    let blockState = false;
+    for (let index = 0; index < lines.length; index += 1) {
+      const text = lines[index];
+      const startState = blockState;
+      const result = highlighter(text, startState);
+      blockState = result.endState;
+
+      const previous = renderedRows[index];
+      if (previous && previous.text === text && previous.startState === startState) continue;
+
+      const row = previous ? previous.node : createRow();
+      fillRow(row, index, result.tokens);
+      if (!previous) container.append(row);
+      renderedRows[index] = { node: row, text, startState };
+    }
+
+    while (renderedRows.length > lines.length) renderedRows.pop().node.remove();
+    setText($("lineCount"), `${lines.length}줄`);
+  }
+
+  function createRow() {
+    const row = document.createElement("div");
+    row.className = "code-line";
+    const number = document.createElement("span");
+    number.className = "ln";
+    number.setAttribute("aria-hidden", "true");
+    const code = document.createElement("code");
+    code.className = "lc";
+    row.append(number, code);
+    return row;
+  }
+
+  function fillRow(row, index, tokens) {
+    const [number, code] = row.children;
+    setText(number, String(index + 1));
+
+    if (tokens.length === 0) {
+      code.textContent = "";
+      return;
+    }
+    if (tokens.length === 1 && tokens[0].kind === "plain") {
+      code.textContent = tokens[0].text;
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const token of tokens) {
+      if (token.kind === "plain") {
+        fragment.append(document.createTextNode(token.text));
+      } else {
+        const span = document.createElement("span");
+        span.className = `t-${token.kind}`;
+        span.textContent = token.text;
+        fragment.append(span);
+      }
+    }
+    code.replaceChildren(fragment);
+  }
+
+  // --- 구문 강조 -------------------------------------------------------
+  // 의존성을 두지 않으려고 직접 훑는다. 완벽한 파서가 아니라 읽기 편하게 만드는 정도다.
+  const KEYWORDS = new Set(`
+abstract and as async await base bool break byte case catch char class const constexpr continue
+decimal def default delegate do double elif else enum event except explicit export extends extern
+false final finally fixed float for foreach from function global goto if implements implicit import
+in include init instanceof int interface internal is lambda let lock long namespace new nonlocal not
+null nullptr object operator or out override params partial pass private protected public raise
+readonly record ref return sbyte sealed self short sizeof static string struct switch template this
+throw true try typedef typename typeof uint ulong unsafe ushort using var virtual void volatile
+while with yield None True False
+`.trim().split(/\s+/));
+
+  const C_LIKE = new Set(["C#", "C++", "JavaScript", "TypeScript", "Java", "CSS", "SQL"]);
+  const HASH_COMMENT = new Set(["Python", "YAML"]);
+
+  function highlighterFor(language, lineCount) {
+    // 아주 큰 파일에서는 강조를 생략한다. 읽는 속도보다 렌더링이 느려지면 손해다.
+    if (lineCount > 3000) return (text) => ({ tokens: [{ kind: "plain", text }], endState: false });
+
+    const lineComment = HASH_COMMENT.has(language) ? "#" : "//";
+    const blockComments = C_LIKE.has(language);
+    const keywords = language !== "HTML" && language !== "XML" && language !== "JSON" && language !== "Text";
+    return (text, startState) => tokenize(text, startState, lineComment, blockComments, keywords);
+  }
+
+  function tokenize(text, insideBlock, lineComment, blockComments, keywords) {
+    const tokens = [];
+    let plain = "";
+    let index = 0;
+
+    const flush = () => { if (plain) { tokens.push({ kind: "plain", text: plain }); plain = ""; } };
+    const push = (kind, value) => { flush(); tokens.push({ kind, text: value }); };
+
+    if (insideBlock) {
+      const end = text.indexOf("*/");
+      if (end === -1) return { tokens: [{ kind: "comment", text }], endState: true };
+      tokens.push({ kind: "comment", text: text.slice(0, end + 2) });
+      index = end + 2;
+    }
+
+    while (index < text.length) {
+      const rest = text.slice(index);
+
+      if (blockComments && rest.startsWith("/*")) {
+        const end = rest.indexOf("*/", 2);
+        if (end === -1) {
+          push("comment", rest);
+          return { tokens, endState: true };
+        }
+        push("comment", rest.slice(0, end + 2));
+        index += end + 2;
+        continue;
+      }
+
+      if (rest.startsWith(lineComment)) {
+        push("comment", rest);
+        break;
+      }
+
+      const quote = text[index];
+      if (quote === '"' || quote === "'" || quote === "`") {
+        let cursor = index + 1;
+        while (cursor < text.length) {
+          if (text[cursor] === "\\") { cursor += 2; continue; }
+          if (text[cursor] === quote) { cursor += 1; break; }
+          cursor += 1;
+        }
+        push("string", text.slice(index, Math.min(cursor, text.length)));
+        index = cursor;
+        continue;
+      }
+
+      if (/[0-9]/.test(quote) && !/[\w.]/.test(text[index - 1] || "")) {
+        const match = /^[0-9][\w.]*/.exec(rest);
+        push("number", match[0]);
+        index += match[0].length;
+        continue;
+      }
+
+      if (/[A-Za-z_$#@]/.test(quote)) {
+        const match = /^[A-Za-z_$#@][\w$]*/.exec(rest);
+        if (keywords && KEYWORDS.has(match[0])) push("keyword", match[0]);
+        else plain += match[0];
+        index += match[0].length;
+        continue;
+      }
+
+      plain += quote;
+      index += 1;
+    }
+
+    flush();
+    return { tokens, endState: false };
+  }
+  // ---------------------------------------------------------------------
 
   // 목록을 통째로 다시 만들지 않고 id 기준으로 맞춰 넣는다.
   // 그래야 폴링할 때마다 포커스와 선택이 날아가지 않는다.
@@ -205,6 +520,7 @@
     open.addEventListener("click", () => {
       selectedId = file.id;
       localStorage.setItem("classroom-live:selected-file", selectedId);
+      setFollowing(false);
       openFiles(false);
       void refresh();
     });
@@ -252,6 +568,7 @@
     if (isSelected) open.setAttribute("aria-current", "page");
     else open.removeAttribute("aria-current");
 
+    setTitle(open, `${file.path} · ${file.language}`);
     setText(icon, shortLanguage(file.language));
     setText(name, file.name);
     setText(updated, relativeTime(file.updatedAt));
@@ -261,8 +578,9 @@
 
   function renderHost(payload) {
     setText($("pinValue"), payload.pin);
-    setText($("toggleBroadcast"), payload.broadcasting ? "방송 일시정지" : "방송 시작");
+    setText($("toggleBroadcast"), payload.broadcasting ? "화면 고정" : "방송 시작");
     setText($("hostStatus"), payload.visualStudioStatus);
+    setTitle($("hostStatus"), payload.visualStudioStatus);
   }
 
   function setConnection(text, kind) {

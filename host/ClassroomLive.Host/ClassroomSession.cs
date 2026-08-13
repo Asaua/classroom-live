@@ -13,6 +13,7 @@ sealed class ClassroomSession
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
     private string? _professorActiveId;
     private string? _professorActiveName;
+    private int? _professorActiveLine;
     private bool _broadcasting;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "Visual Studio 확장 연결 대기 중";
@@ -67,13 +68,13 @@ sealed class ClassroomSession
         get { lock (_gate) return _broadcasting; }
     }
 
+    /// <summary>
+    /// 방송을 켜고 끈다. 끄면 '화면 고정'이다. 학생 화면은 마지막 상태 그대로 남고
+    /// 갱신만 멈춘다. 파일을 학생에게서 완전히 내리려면 Remove를 쓴다.
+    /// </summary>
     public void SetBroadcasting(bool enabled)
     {
-        lock (_gate)
-        {
-            _broadcasting = enabled;
-            if (!enabled) _professorActiveId = null;
-        }
+        lock (_gate) _broadcasting = enabled;
     }
 
     /// <summary>
@@ -82,66 +83,79 @@ sealed class ClassroomSession
     /// </summary>
     public ExtensionUpdateOutcome ApplyExtensionUpdate(ExtensionUpdateRequest request)
     {
-        var outcome = ExtensionUpdateOutcome.Accepted;
         lock (_gate)
         {
             _lastExtensionHeartbeat = DateTimeOffset.UtcNow;
 
+            var action = request.Action?.ToLowerInvariant();
             var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) &&
                                     !string.IsNullOrWhiteSpace(request.SolutionRoot) &&
                                     SecurityRules.IsShareable(request.FilePath, request.SolutionRoot, request.Content?.Length ?? 0);
-            _professorActiveName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
-            _professorActiveId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
-            if (_professorActiveId is not null && !_files.ContainsKey(_professorActiveId))
-                _professorActiveId = null;
+            var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
+            int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
 
-            // Action은 신뢰할 수 없는 입력이다. null도 default로 흘려보낸다.
-            switch (request.Action?.ToLowerInvariant())
+            if (action == "unshare")
             {
-                case "share":
-                    if (hasSafeActiveFile) _suppressedFiles.Remove(FileId(request.FilePath!));
-                    goto case "sync";
-                case "sync":
-                    if (hasSafeActiveFile && request.Content is not null &&
-                        !_suppressedFiles.Contains(FileId(request.FilePath!)))
-                    {
-                        UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
-                        var id = FileId(request.FilePath!);
-                        _professorActiveId = _files.ContainsKey(id) ? id : null;
-                        _visualStudioStatus = _broadcasting
-                            ? $"연결됨 · {_professorActiveName} 추적 중"
-                            : $"연결됨 · {_professorActiveName} (방송 일시정지 중)";
-                    }
-                    else if (hasSafeActiveFile && _suppressedFiles.Contains(FileId(request.FilePath!)))
-                    {
-                        _professorActiveId = null;
-                        _visualStudioStatus = "연결됨 · 현재 파일은 호스트 목록에서 숨겨짐";
-                        outcome = ExtensionUpdateOutcome.Suppressed;
-                    }
-                    else
-                    {
-                        _visualStudioStatus = "현재 파일은 보안 규칙으로 공유할 수 없습니다.";
-                    }
-                    break;
-                case "unshare":
-                    if (!string.IsNullOrWhiteSpace(request.FilePath))
-                    {
-                        var id = FileId(request.FilePath);
-                        _files.Remove(id);
-                        _suppressedFiles.Remove(id);
-                    }
-                    _professorActiveId = null;
-                    _visualStudioStatus = "연결됨 · 현재 파일 공유 해제됨";
-                    break;
-                default:
-                    _visualStudioStatus = _professorActiveName is null
-                        ? "연결됨 · 코드 파일을 선택해주세요."
-                        : $"연결됨 · {_professorActiveName} (공유 안 함)";
-                    break;
+                if (!string.IsNullOrWhiteSpace(request.FilePath))
+                {
+                    var id = FileId(request.FilePath);
+                    _files.Remove(id);
+                    _suppressedFiles.Remove(id);
+                    if (_professorActiveId == id) ClearProfessorPointer();
+                }
+                _visualStudioStatus = "연결됨 · 현재 파일 공유 해제됨";
+                return ExtensionUpdateOutcome.Accepted;
             }
-        }
 
-        return outcome;
+            if (!_broadcasting)
+            {
+                // 화면 고정 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
+                // 발밑에서 움직이지 않아야 '고정'이라는 말이 지켜진다.
+                _visualStudioStatus = "연결됨 · 화면 고정 중 (학생에게는 마지막 화면이 보입니다)";
+                return ExtensionUpdateOutcome.Accepted;
+            }
+
+            if (action == "share" && activeId is not null) _suppressedFiles.Remove(activeId);
+
+            if (action is not ("share" or "sync"))
+            {
+                _professorActiveName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
+                _professorActiveId = activeId is not null && _files.ContainsKey(activeId) ? activeId : null;
+                _professorActiveLine = _professorActiveId is null ? null : activeLine;
+                _visualStudioStatus = _professorActiveName is null
+                    ? "연결됨 · 코드 파일을 선택해주세요."
+                    : $"연결됨 · {_professorActiveName} (공유 안 함)";
+                return ExtensionUpdateOutcome.Accepted;
+            }
+
+            if (!hasSafeActiveFile || request.Content is null)
+            {
+                ClearProfessorPointer();
+                _visualStudioStatus = "현재 파일은 보안 규칙으로 공유할 수 없습니다.";
+                return ExtensionUpdateOutcome.Accepted;
+            }
+
+            if (_suppressedFiles.Contains(activeId!))
+            {
+                ClearProfessorPointer();
+                _visualStudioStatus = "연결됨 · 현재 파일은 호스트 목록에서 숨겨짐";
+                return ExtensionUpdateOutcome.Suppressed;
+            }
+
+            UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
+            _professorActiveName = Path.GetFileName(request.FilePath);
+            _professorActiveId = _files.ContainsKey(activeId!) ? activeId : null;
+            _professorActiveLine = _professorActiveId is null ? null : activeLine;
+            _visualStudioStatus = $"연결됨 · {_professorActiveName} 추적 중";
+            return ExtensionUpdateOutcome.Accepted;
+        }
+    }
+
+    private void ClearProfessorPointer()
+    {
+        _professorActiveId = null;
+        _professorActiveName = null;
+        _professorActiveLine = null;
     }
 
     private void UpdateSharedFile(string fullPath, string content, string solutionRoot)
@@ -181,7 +195,7 @@ sealed class ClassroomSession
             if (_suppressedFiles.Count > 500) _suppressedFiles.Clear();
             _suppressedFiles.Add(id);
             _files.Remove(id);
-            if (_professorActiveId == id) _professorActiveId = null;
+            if (_professorActiveId == id) ClearProfessorPointer();
         }
     }
 
@@ -190,9 +204,7 @@ sealed class ClassroomSession
         lock (_gate)
         {
             PruneViewers();
-            // 일시정지는 이미 공유된 코드까지 감춘다. 교수가 "정지"를 눌렀으면
-            // 학생 화면에서도 실제로 사라져야 한다.
-            return Snapshot(includeShared: _broadcasting);
+            return Snapshot();
         }
     }
 
@@ -202,24 +214,22 @@ sealed class ClassroomSession
         {
             PruneViewers();
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
-            // 교수 화면은 일시정지 중에도 목록을 관리해야 하므로 항상 전부 보여준다.
-            return new HostSnapshot(Snapshot(includeShared: true), _broadcasting, connected,
+            return new HostSnapshot(Snapshot(), _broadcasting, connected,
                 connected ? _visualStudioStatus : "Visual Studio에서 Classroom Live 확장을 설치·실행해주세요.",
                 Pin, studentUrls);
         }
     }
 
-    private ClassroomSnapshot Snapshot(bool includeShared) => new(
+    private ClassroomSnapshot Snapshot() => new(
         "Classroom Live 수업",
-        includeShared ? _professorActiveId : null,
-        includeShared ? _professorActiveName : null,
+        _professorActiveId,
+        _professorActiveName,
+        _professorActiveLine,
         _viewers.Count,
         _broadcasting,
-        includeShared
-            // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
-            // 학생 커서 밑에서 계속 맨 위로 튄다.
-            ? _files.Values.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray()
-            : []);
+        // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
+        // 학생 커서 밑에서 계속 맨 위로 튄다.
+        _files.Values.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray());
 
     private void PruneViewers()
     {
@@ -290,6 +300,7 @@ sealed record ClassroomSnapshot(
     string ClassName,
     string? ProfessorActiveId,
     string? ProfessorActiveName,
+    int? ProfessorActiveLine,
     int Viewers,
     bool Broadcasting,
     SharedFile[] Files);
@@ -369,31 +380,40 @@ static class SecurityRules
     {
         var root = Path.Combine(Path.GetTempPath(), "ClassroomLiveTest", "Solution");
         var file = Path.Combine(root, "Scripts", "Player.cs");
+        ExtensionUpdateRequest Sync(string content, int line) =>
+            new("sync", file, root, content, line);
 
         var session = new ClassroomSession();
         session.SetBroadcasting(true);
-        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}"));
-        Assert(session.GetSnapshot().Files.Length == 1, "방송 중에는 학생이 파일을 본다");
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 3));
 
+        var live = session.GetSnapshot();
+        Assert(live.Files.Length == 1, "방송 중에는 학생이 파일을 본다");
+        Assert(live.ProfessorActiveLine == 3, "교수가 보는 줄이 전달된다");
+
+        // 화면 고정: 마지막 상태는 남고 갱신만 멈춘다.
         session.SetBroadcasting(false);
-        Assert(session.GetSnapshot().Files.Length == 0, "일시정지하면 학생 화면에서 사라진다");
-        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 1, "일시정지해도 교수는 목록을 관리한다");
+        session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 99));
+        var frozen = session.GetSnapshot();
+        Assert(frozen.Files.Length == 1, "고정해도 학생 화면은 남는다");
+        Assert(frozen.Files[0].Content == "class Player {}", "고정 중에는 내용이 갱신되지 않는다");
+        Assert(frozen.ProfessorActiveLine == 3, "고정 중에는 교수 위치도 움직이지 않는다");
+
+        session.SetBroadcasting(true);
+        session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));
+        Assert(session.GetSnapshot().Files[0].Content.Contains("Update"), "재개하면 다시 갱신된다");
+        Assert(session.GetSnapshot().ProfessorActiveLine == 7, "재개하면 교수 위치도 따라온다");
 
         // 교수가 ×로 내리면 확장에 409로 알려서 단축키 한 번에 다시 공유되게 한다.
-        session.SetBroadcasting(true);
-        var fileId = session.GetHostSnapshot([]).Classroom.Files[0].Id;
+        var fileId = session.GetSnapshot().Files[0].Id;
         session.Remove(fileId);
-        Assert(
-            session.ApplyExtensionUpdate(new ExtensionUpdateRequest("sync", file, root, "class Player {}"))
-                == ExtensionUpdateOutcome.Suppressed,
+        Assert(session.ApplyExtensionUpdate(Sync("class Player {}", 1)) == ExtensionUpdateOutcome.Suppressed,
             "내린 파일은 확장에 Suppressed로 알린다");
-        Assert(
-            session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}"))
-                == ExtensionUpdateOutcome.Accepted,
-            "다시 공유하면 정상 수락된다");
+        Assert(session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1))
+            == ExtensionUpdateOutcome.Accepted, "다시 공유하면 정상 수락된다");
 
         // Action이 null이어도 죽지 않아야 한다.
-        session.ApplyExtensionUpdate(new ExtensionUpdateRequest(null!, null, null, null));
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest(null!, null, null, null, 0));
 
         Assert(!session.IsPinRateLimited("1.2.3.4"), "처음에는 제한 없음");
         for (var i = 0; i < ClassroomSession.MaxPinAttempts; i++) session.RecordPinFailure("1.2.3.4");

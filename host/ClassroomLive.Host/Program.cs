@@ -231,4 +231,6 @@ record ExtensionUpdateRequest(
     string Action,
     string? FilePath,
     string? SolutionRoot,
-    string? Content);
+    string? Content,
+    /// <summary>교수가 보고 있는 줄. 확장이 모르면 0.</summary>
+    int ActiveLine);

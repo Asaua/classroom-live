@@ -19,7 +19,7 @@
         </div>
       </div>
       <div class="session-summary">
-        <span class="connection is-waiting" id="connection"><i></i><b>연결 중</b></span>
+        <span class="connection is-waiting" id="connection" aria-live="polite"><i></i><b>연결 중</b></span>
         <span class="viewer-count"><b id="viewerCount">0</b>명 접속 중</span>
         <button class="mobile-files" id="mobileFiles" type="button" aria-label="공유 파일 열기">파일 <span id="mobileFileCount">0</span></button>
       </div>
@@ -43,7 +43,7 @@
         <header class="editor-header">
           <div class="file-heading">
             <span class="file-type" id="fileType">···</span>
-            <div>
+            <div class="file-heading-copy">
               <div class="file-title-row">
                 <h1 id="fileName">공유된 파일 없음</h1>
                 <span>내 화면</span>
@@ -62,16 +62,23 @@
           <h2>아직 공유된 파일이 없습니다</h2>
           <p>교수님이 방송을 시작하면 코드가 여기에 나타납니다.</p>
         </div>
-        <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" hidden>
-          <pre class="code-gutter" id="codeGutter" aria-hidden="true"></pre>
-          <pre class="code-content"><code id="codeContent"></code></pre>
+        <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" tabindex="0" hidden>
+          <div class="code-lines" id="codeLines"></div>
         </div>
 
         <footer class="statusbar">
-          <span><i class="status-dot"></i><span id="syncStatus">연결 확인 중</span></span>
-          <span id="language">Text</span>
-          <span>UTF-8</span>
-          <span id="lineCount">0줄</span>
+          <span class="status-live"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 확인 중</span></span>
+          <span class="status-meta" id="language">Text</span>
+          <span class="status-meta" id="lineCount">0줄</span>
+          <div class="viewer-tools">
+            <button class="tool-button" id="followProfessor" type="button" aria-pressed="false" hidden>따라가기</button>
+            <button class="tool-button" id="copyCode" type="button">복사</button>
+            <button class="tool-button" id="toggleWrap" type="button" aria-pressed="false">줄바꿈</button>
+            <span class="tool-group">
+              <button class="tool-button" id="fontSmaller" type="button" aria-label="글자 작게">A−</button>
+              <button class="tool-button" id="fontLarger" type="button" aria-label="글자 크게">A+</button>
+            </span>
+          </div>
         </footer>
       </article>
 
@@ -88,6 +95,8 @@
       </aside>
     </section>
   </main>
+
+  <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
 
   <button class="backdrop" id="backdrop" type="button" aria-label="파일 목록 닫기" hidden></button>
 

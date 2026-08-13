@@ -61,14 +61,24 @@ msbuild extension\ClassroomLive.Extension\ClassroomLive.Extension.csproj /p:Conf
 | `CLASSROOM_LIVE_PORT` | `5050` | 대기 포트. 확장은 핸드셰이크 파일에서 자동으로 읽습니다 |
 | `CLASSROOM_LIVE_NO_BROWSER` | – | `1`이면 시작할 때 브라우저를 열지 않습니다 |
 
+## 학생 화면에서 할 수 있는 것
+
+- 원하는 파일을 직접 골라 봅니다. 교수님이 다른 파일로 옮겨도 내 화면은 그대로입니다.
+- **교수님 N줄** 버튼으로 교수님이 보고 있는 줄로 이동하고, 켜두면 계속 따라갑니다.
+- **복사**로 현재 파일 전체를 클립보드에 담습니다.
+- **줄바꿈**으로 긴 줄을 접습니다. 폰에서 좌우 스크롤 없이 읽을 때 씁니다.
+- **A− / A+**로 글자 크기를 조절합니다. 설정은 다음 접속에도 유지됩니다.
+
 ## 테스트
 
 ```bash
-dotnet run --project host/ClassroomLive.Host -- --self-test
+dotnet run --project host/ClassroomLive.Host -- --self-test   # 호스트
+node --test                                                    # 학생 화면 구문 강조
 ```
 
-공유 보안 규칙, 방송 일시정지 시 학생 화면 차단, PIN 시도 제한, 숨긴 파일의 409 응답을
-검사합니다.
+호스트 검사는 공유 보안 규칙, 화면 고정 시 갱신 정지, PIN 시도 제한, 숨긴 파일의 409
+응답을 확인합니다. `node --test`는 구문 강조가 코드를 한 글자도 잃지 않는지 확인합니다.
+별도 설치 없이 Node.js만 있으면 됩니다.
 
 ## 안전장치
 
@@ -76,7 +86,8 @@ dotnet run --project host/ClassroomLive.Host -- --self-test
 - `.env`, `appsettings*`, `secrets.json`, `.git`, `.vs`, `bin`, `obj`, `node_modules`는 자동 차단.
 - 파일 1개당 100만 자, 목록 40개까지.
 - 학생은 읽기만 가능합니다. 수정·업로드 경로가 없습니다.
-- 방송을 일시정지하면 이미 공유된 코드도 학생 화면에서 사라집니다.
+- **화면 고정**은 갱신만 멈춥니다. 학생에게는 마지막 화면이 그대로 보입니다.
+  학생 화면에서 완전히 내리려면 교수 화면의 × 또는 Ctrl+Alt+L을 쓰세요.
 - 학생 접속에는 6자리 PIN이 필요하며, 실패가 반복되면 해당 주소를 1분간 차단합니다.
 - 확장 → 호스트 요청은 루프백 + 토큰을 모두 만족해야 받습니다.
 
