@@ -23,7 +23,10 @@
   let shuttingDown = false;
 
   const FONT_STEPS = [11, 12.5, 14, 16, 18, 21, 24];
-  let fontIndex = clampFontIndex(Number(localStorage.getItem("classroom-live:font")));
+  const DEFAULT_FONT_INDEX = 1;
+  // Number(null)은 0이다. 그대로 넘기면 저장값이 없을 때 가장 작은 단계로 시작한다.
+  const storedFont = localStorage.getItem("classroom-live:font");
+  let fontIndex = clampFontIndex(storedFont === null ? DEFAULT_FONT_INDEX : Number(storedFont));
   let wrapEnabled = localStorage.getItem("classroom-live:wrap") === "1";
   let following = false;
   let followedLine = 0;
@@ -237,7 +240,7 @@
   }
 
   function clampFontIndex(value) {
-    const index = Number.isFinite(value) ? Math.round(value) : 1;
+    const index = Number.isFinite(value) ? Math.round(value) : DEFAULT_FONT_INDEX;
     return Math.min(FONT_STEPS.length - 1, Math.max(0, index));
   }
 

@@ -104,6 +104,9 @@ button, input { font: inherit }
 
 .workspace {
   position: relative;
+  /* 닫힌 파일 패널은 translateX로 오른쪽 밖에 세워둔다. absolute 배치라
+     이 clip이 없으면 그만큼이 스크롤 영역으로 잡혀 페이지에 가로 스크롤이 생긴다. */
+  overflow: hidden;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
