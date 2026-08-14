@@ -189,9 +189,15 @@ app.MapPost("/api/host/firewall", (HttpContext context, ClassroomSession session
         // 관리자 권한 창을 한 번만 띄우려고 두 명령을 cmd 하나로 묶는다.
         var script = $"netsh advfirewall firewall delete rule name=\"{ruleName}\" >nul 2>&1 & " +
                      $"netsh advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow " +
-                     // 학교 와이파이는 Windows에서 '공용'으로 잡히는 일이 많다. public을 빼면
-                     // 정작 수업에서 학생이 못 붙는다. 실제 범위 제한은 remoteip=LocalSubnet이 한다.
-                     $"protocol=TCP localport={port} remoteip=LocalSubnet profile=private,public " +
+                     // remoteip은 사설 대역 전체로 잡는다. LocalSubnet으로 좁혔더니
+                     // 학교 와이파이가 SSID 하나에 서브넷 여러 개(192.168.104.0/21,
+                     // 192.168.48.0/21 …)로 쪼개진 환경에서 다른 서브넷 학생이 전부 막혔다.
+                     // 사설 대역만 여는 것이므로 인터넷에서는 여전히 들어올 수 없다.
+                     $"protocol=TCP localport={port} " +
+                     $"remoteip=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16 " +
+                     // 교직원 PC는 도메인 조인된 경우가 많다. 도메인 프로필을 빼면
+                     // 규칙이 만들어져도 적용되지 않는다.
+                     $"profile=any " +
                      $"program=\"{executable}\" enable=yes";
         using var process = Process.Start(new ProcessStartInfo
         {
@@ -393,15 +399,23 @@ static string[] GetStudentUrls(int port, string pin)
                               gateway.Address.AddressFamily == AddressFamily.InterNetwork &&
                               !gateway.Address.Equals(IPAddress.Any)))
         .SelectMany(network => network.GetIPProperties().UnicastAddresses
-            .Select(address => new { network.Name, address.Address }))
+            .Select(address => new { network.Name, network.Description, address.Address }))
         .Where(item => item.Address.AddressFamily == AddressFamily.InterNetwork && IsPrivateLan(item.Address))
-        .OrderBy(item => item.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+        // 교수 PC는 Visual Studio가 깔린 개발 머신이라 Hyper-V, WSL, Docker 같은
+        // 가상 어댑터가 흔하다. 그쪽 주소를 학생에게 주면 아무도 못 붙는다.
+        .OrderBy(item => IsVirtualAdapter(item.Name) || IsVirtualAdapter(item.Description) ? 1 : 0)
+        .ThenBy(item => item.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
         .Select(item => $"http://{item.Address}:{port}/?pin={WebUtility.UrlEncode(pin)}")
         .Distinct()
         .ToArray();
 
     return addresses.Length > 0 ? addresses : [$"http://localhost:{port}/?pin={pin}"];
 }
+
+static bool IsVirtualAdapter(string name) =>
+    new[] { "vEthernet", "Hyper-V", "VirtualBox", "VMware", "Docker", "WSL",
+            "Tailscale", "ZeroTier", "Radmin", "TAP-", "Npcap", "Loopback" }
+        .Any(marker => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
 
 static bool IsPrivateLan(IPAddress address)
 {

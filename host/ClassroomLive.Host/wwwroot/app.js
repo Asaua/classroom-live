@@ -84,11 +84,18 @@
     await refresh();
   });
   $("copyLink").addEventListener("click", async () => {
-    const url = latestHostState?.studentUrls?.[0];
-    if (!url) return;
-    const button = $("copyLink");
-    button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
-    setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
+    const urls = latestHostState?.studentUrls ?? [];
+    if (urls.length === 0) return;
+    // 주소가 여러 개면 첫 번째를 말없이 복사하면 안 된다. 가상 어댑터나
+    // 다른 네트워크 주소를 학생에게 나눠주면 아무도 못 붙는데 이유를 알 수 없다.
+    if (urls.length > 1) {
+      popup("학생이 접속할 주소를 고르세요", urls.map((url) => ({
+        label: hostOf(url),
+        select: () => void copyAndFlash(url),
+      })));
+      return;
+    }
+    await copyAndFlash(urls[0]);
   });
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
@@ -166,6 +173,17 @@
       notify("요청에 실패했어요");
     }
     await refresh();
+  }
+
+  /// 주소에서 학생에게 불러줄 부분만 뽑는다. PIN까지 읽어줄 필요는 없다.
+  function hostOf(url) {
+    try { return new URL(url).host; } catch { return url; }
+  }
+
+  async function copyAndFlash(url) {
+    const button = $("copyLink");
+    button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
+    setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
   }
 
   function dismissNote() {
