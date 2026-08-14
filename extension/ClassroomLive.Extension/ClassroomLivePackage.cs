@@ -50,6 +50,9 @@ namespace ClassroomLive.Extension
         private const HttpStatusCode UnprocessableEntity = (HttpStatusCode)422;
 
         private static readonly Guid CommandSet = new Guid("0FC38C23-09B7-4C95-89F5-BEB7321757E4");
+        // Visual Studio 창마다 다른 값. 여러 개를 열었을 때 호스트가 누가 보낸 것인지
+        // 구분하지 못하면 창들이 서로 활성 파일을 덮어써서 화면이 깜빡인다.
+        private static readonly string InstanceId = Guid.NewGuid().ToString("N");
         private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         private readonly HashSet<string> sharedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private dynamic dte;
@@ -62,6 +65,7 @@ namespace ClassroomLive.Extension
         private bool hostReachable;
         private bool broadcasting;
         private bool everStarted;
+        private bool isOwner = true;
         private bool currentShareable;
         private string currentBlockReason;
         private bool currentShared;
@@ -271,7 +275,9 @@ namespace ClassroomLive.Extension
                 {
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
                     var path = ActiveFilePath();
-                    var isShared = path != null && sharedFiles.Contains(path);
+                    // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
+                    // UI 스레드를 붙잡을 이유가 없다.
+                    var isShared = isOwner && path != null && sharedFiles.Contains(path);
                     var update = CaptureActiveFile(includeContent: isShared) ?? new ExtensionUpdate
                     {
                         Action = "heartbeat"
@@ -308,6 +314,7 @@ namespace ClassroomLive.Extension
             hostReachable = result.Status.HasValue;
             if (result.Reply == null) return;
 
+            isOwner = result.Reply.Owner;
             broadcasting = result.Reply.Broadcasting;
             everStarted = result.Reply.EverStarted;
             currentShareable = result.Reply.Shareable;
@@ -426,6 +433,7 @@ namespace ClassroomLive.Extension
 
             try
             {
+                update.InstanceId = InstanceId;
                 var serializer = new DataContractJsonSerializer(typeof(ExtensionUpdate));
                 string json;
                 using (var stream = new MemoryStream())
@@ -534,6 +542,7 @@ namespace ClassroomLive.Extension
         private sealed class HostReply
         {
             [DataMember(Name = "command")] public string Command { get; set; }
+            [DataMember(Name = "owner")] public bool Owner { get; set; }
             [DataMember(Name = "broadcasting")] public bool Broadcasting { get; set; }
             [DataMember(Name = "everStarted")] public bool EverStarted { get; set; }
             [DataMember(Name = "shareable")] public bool Shareable { get; set; }
@@ -633,6 +642,7 @@ namespace ClassroomLive.Extension
             [DataMember] public string SolutionRoot { get; set; }
             [DataMember] public string Content { get; set; }
             [DataMember] public int ActiveLine { get; set; }
+            [DataMember] public string InstanceId { get; set; }
             [DataMember] public bool AllowSensitive { get; set; }
         }
 

@@ -186,8 +186,16 @@ app.MapPost("/api/host/firewall", (HttpContext context, ClassroomSession session
         var ruleName = $"Classroom Live {port}";
         var executable = Environment.ProcessPath ?? throw new InvalidOperationException("실행 파일 경로를 찾지 못했습니다.");
         // 누를 때마다 규칙이 중복 추가되지 않도록 기존 규칙을 먼저 지운다.
-        // 관리자 권한 창을 한 번만 띄우려고 두 명령을 cmd 하나로 묶는다.
-        var script = $"netsh advfirewall firewall delete rule name=\"{ruleName}\" >nul 2>&1 & " +
+        // 관리자 권한 창을 한 번만 띄우려고 명령들을 cmd 하나로 묶는다.
+        //
+        // 이 실행 파일에 걸린 인바운드 규칙을 먼저 전부 지운다. 허용뿐 아니라
+        // '차단' 규칙도 지워야 한다. Windows의 "네트워크 액세스 허용" 팝업에서
+        // 공용 네트워크를 해제하면 Windows가 차단 규칙을 만드는데, 방화벽은
+        // 차단이 허용을 이기기 때문에 그것이 남아 있으면 아래 허용 규칙을
+        // 아무리 잘 만들어도 무시된다. 실제로 교실에서 이것 때문에 막혔다.
+        // (netsh delete 는 action= 을 받지 않으므로 프로그램 기준으로 지운다)
+        var script = $"netsh advfirewall firewall delete rule name=all dir=in program=\"{executable}\" >nul 2>&1 & " +
+                     $"netsh advfirewall firewall delete rule name=\"{ruleName}\" >nul 2>&1 & " +
                      $"netsh advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow " +
                      // remoteip은 사설 대역 전체로 잡는다. LocalSubnet으로 좁혔더니
                      // 학교 와이파이가 SSID 하나에 서브넷 여러 개(192.168.104.0/21,
@@ -243,10 +251,10 @@ app.MapPost("/api/extension/update", (HttpContext context, ExtensionUpdateReques
     var outcome = session.ApplyExtensionUpdate(request);
     if (outcome == ExtensionUpdateOutcome.Unshared) return Results.Conflict();
     if (outcome is ExtensionUpdateOutcome.NeedsConfirmation or ExtensionUpdateOutcome.Rejected)
-        return Results.Json(session.BuildReply(), statusCode: StatusCodes.Status422UnprocessableEntity);
+        return Results.Json(session.BuildReply(request.InstanceId), statusCode: StatusCodes.Status422UnprocessableEntity);
 
     // 교수 화면에서 누른 명령과 Visual Studio 메뉴가 쓸 상태를 함께 돌려준다.
-    return Results.Json(session.BuildReply());
+    return Results.Json(session.BuildReply(request.InstanceId));
 });
 
 app.MapDelete("/api/host/files/{id}", (HttpContext context, string id, ClassroomSession session) =>
@@ -442,4 +450,6 @@ record ExtensionUpdateRequest(
     /// <summary>교수가 보고 있는 줄. 확장이 모르면 0.</summary>
     int ActiveLine,
     /// <summary>민감 내용 경고를 교수가 이번 수업에서 승인했는지.</summary>
-    bool AllowSensitive = false);
+    bool AllowSensitive = false,
+    /// <summary>Visual Studio 창마다 다른 값. 창을 여러 개 열었을 때 누가 보낸 것인지 구분한다.</summary>
+    string? InstanceId = null);

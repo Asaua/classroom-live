@@ -7,6 +7,8 @@ sealed class ClassroomSession
     internal const int MaxPinAttempts = 10;
     private static readonly TimeSpan PinAttemptWindow = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan PendingCommandLifetime = TimeSpan.FromSeconds(5);
+    /// <summary>주인이 이 시간 동안 조용하면 다른 창이 넘겨받는다. 폴링 간격(0.6초)보다 넉넉히 크게.</summary>
+    private static readonly TimeSpan OwnerTimeout = TimeSpan.FromSeconds(3);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SharedFile> _files = [];
@@ -28,6 +30,10 @@ sealed class ClassroomSession
     private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
     private bool _everStarted;
+    // Visual Studio를 여러 개 열면 각 창의 확장이 전부 자기 활성 파일을 보낸다.
+    // 한 창만 '주인'으로 두지 않으면 교수 화면과 학생 화면이 창 사이를 오가며 깜빡인다.
+    private string? _ownerInstance;
+    private DateTimeOffset _ownerSeenAt;
     private DateTimeOffset _lastHostPoll = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "연결 대기";
@@ -107,6 +113,22 @@ sealed class ClassroomSession
             _lastExtensionHeartbeat = DateTimeOffset.UtcNow;
 
             var action = request.Action?.ToLowerInvariant();
+
+            // 교수가 그 창에서 직접 누른 조작이면 주인을 그쪽으로 넘긴다.
+            // 그래야 다른 창으로 옮겨가서 공유를 눌렀을 때 바로 먹는다.
+            var instance = string.IsNullOrWhiteSpace(request.InstanceId) ? "unknown" : request.InstanceId!;
+            var userAction = action is "share" or "unshare" or "hide" or "unhide";
+            if (_ownerInstance is null || userAction ||
+                DateTimeOffset.UtcNow - _ownerSeenAt > OwnerTimeout)
+            {
+                _ownerInstance = instance;
+            }
+            if (_ownerInstance != instance)
+            {
+                // 주인이 아닌 창의 폴링은 무시한다. 무시해야 깜빡이지 않는다.
+                return ExtensionUpdateOutcome.Accepted;
+            }
+            _ownerSeenAt = DateTimeOffset.UtcNow;
             var blockReason = string.IsNullOrWhiteSpace(request.FilePath)
                 ? null
                 : SecurityRules.BlockReason(request.FilePath, request.SolutionRoot ?? "", request.Content);
@@ -265,11 +287,13 @@ sealed class ClassroomSession
     /// 확장이 폴링할 때마다 돌려주는 상태. Visual Studio 메뉴가 이걸로 글자와
     /// 활성 여부를 정한다. 별도 조회 없이 기존 통로에 실어 보낸다.
     /// </summary>
-    public ExtensionReply BuildReply()
+    public ExtensionReply BuildReply(string? instanceId = null)
     {
         lock (_gate)
         {
+            var instance = string.IsNullOrWhiteSpace(instanceId) ? "unknown" : instanceId!;
             return new ExtensionReply(
+                _ownerInstance is null || _ownerInstance == instance,
                 TakePendingCommand(),
                 _broadcasting,
                 _everStarted,
@@ -457,6 +481,8 @@ static class HostHandshake
 
 /// <summary>확장 폴링 응답. 필드 이름은 그대로 JSON 키가 된다.</summary>
 sealed record ExtensionReply(
+    /// <summary>이 창이 지금 수업을 몰고 있는지. 아니면 폴링이 무시된다.</summary>
+    bool Owner,
     string? Command,
     bool Broadcasting,
     bool EverStarted,
@@ -806,6 +832,34 @@ static class SecurityRules
         var stale = new ClassroomSession();
         stale.RequestShare(true);
         Assert(stale.TakePendingCommand(TimeSpan.FromSeconds(-1)) is null, "오래된 명령은 버린다");
+
+        // Visual Studio 창을 여러 개 열었을 때 서로 덮어쓰지 않아야 한다.
+        var multi = new ClassroomSession();
+        multi.SetBroadcasting(true);
+        var fileA = Path.Combine(root, "A.cs");
+        var fileB = Path.Combine(root, "B.cs");
+        ExtensionUpdateRequest From(string window, string action, string path, string content) =>
+            new(action, path, root, content, 1, false, window);
+
+        // 첫 창이 공유하면 그 창이 주인이 된다.
+        multi.ApplyExtensionUpdate(From("win-1", "share", fileA, "class A {}"));
+        Assert(multi.BuildReply("win-1").Owner, "먼저 조작한 창이 주인이 된다");
+        Assert(!multi.BuildReply("win-2").Owner, "다른 창은 주인이 아니다");
+
+        // 주인이 아닌 창의 폴링은 화면을 바꾸지 못한다. 이게 깜빡임의 원인이었다.
+        multi.ApplyExtensionUpdate(From("win-2", "sync", fileB, "class B {}"));
+        Assert(multi.GetSnapshot().ProfessorActiveName == "A.cs", "다른 창의 폴링은 무시된다");
+        Assert(multi.GetHostSnapshot([]).CurrentFileName == "A.cs", "현재 파일 표시도 흔들리지 않는다");
+
+        // 주인 창의 폴링은 그대로 반영된다.
+        multi.ApplyExtensionUpdate(From("win-1", "sync", fileA, "class A { int x; }"));
+        Assert(multi.GetSnapshot().Files[0].Content.Contains("int x"), "주인 창의 갱신은 반영된다");
+
+        // 교수가 다른 창에서 직접 누르면 주인이 넘어간다.
+        multi.ApplyExtensionUpdate(From("win-2", "share", fileB, "class B {}"));
+        Assert(multi.BuildReply("win-2").Owner, "직접 조작하면 주인이 넘어간다");
+        Assert(!multi.BuildReply("win-1").Owner, "이전 주인은 주인이 아니게 된다");
+        Assert(multi.GetSnapshot().ProfessorActiveName == "B.cs", "넘겨받은 창이 화면을 몬다");
 
         // 확장 메뉴가 쓰는 상태가 그대로 전달되는지.
         var replySession = new ClassroomSession();
