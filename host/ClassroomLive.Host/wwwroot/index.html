@@ -15,7 +15,7 @@
         <span class="brand-mark" aria-hidden="true">C</span>
         <div>
           <div class="brand">Classroom Live <span class="byline">by 21210116 김성현</span></div>
-          <div class="class-name" id="className">연결 중</div>
+          <div class="class-name" id="className">수업 연결 중</div>
         </div>
       </div>
       <div class="session-summary">
@@ -100,6 +100,14 @@
   </main>
 
   <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+
+  <div class="ended" id="ended" role="alertdialog" aria-labelledby="endedTitle" hidden>
+    <div class="ended-copy">
+      <span class="brand-mark" aria-hidden="true">C</span>
+      <h1 id="endedTitle">세션이 종료되었습니다</h1>
+      <p>이 탭은 닫아도 됩니다.</p>
+    </div>
+  </div>
 
   <div class="gate" id="gate" hidden>
     <form class="gate-card" id="joinForm">

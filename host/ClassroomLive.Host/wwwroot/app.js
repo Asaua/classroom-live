@@ -136,15 +136,25 @@
     try {
       await fetch("/api/host/shutdown", { method: "POST", headers: { "X-Admin-Token": adminToken } });
     } catch { /* 종료 중에 연결이 끊기는 것은 정상이다. */ }
-    // 자동으로 사라지면 안 된다. 종료됐다는 사실이 화면에 남아 있어야 한다.
-    popup("종료했어요. 탭을 닫아도 돼요", [{ label: "확인" }]);
-    setConnection("종료", "paused");
+    setSessionState("세션 종료됨", "종료됨", "ended");
     setText($("hostStatus"), "종료됨");
     // 서버가 없으므로 이 버튼들은 이제 아무것도 하지 못한다.
-    // 누를 수 있게 두면 눌러보고 아무 일도 안 일어나는 것을 겪게 된다.
+    // 화면이 덮이더라도 눌리는 상태로 두지 않는다.
     for (const id of ["toggleBroadcast", "shutdown", "allowFirewall", "copyLink", "toggleShare", "copyPin"])
       $(id).disabled = true;
+    $("notice").hidden = true;
+    showEndedScene();
   });
+
+  // 종료 화면은 되돌아갈 수 없는 상태다. 토스트로 스쳐 지나가면 놓치기 쉬워
+  // 화면을 통째로 덮는다.
+  function showEndedScene() {
+    const scene = $("ended");
+    scene.hidden = false;
+    // display:none 에서 바로 클래스를 붙이면 전환이 일어나지 않는다.
+    // 레이아웃이 한 번 잡힌 다음 프레임에 붙여야 처음부터 부드럽게 떠오른다.
+    requestAnimationFrame(() => requestAnimationFrame(() => scene.classList.add("is-visible")));
+  }
 
   $("allowFirewall").addEventListener("click", async () => {
     const button = $("allowFirewall");
@@ -343,7 +353,7 @@
           sessionStorage.removeItem("classroom-live:pin");
           showGate("PIN이 맞지 않아요");
         }
-        setConnection("끊김", "waiting");
+        setSessionState("수업 연결 끊김", "끊김", "waiting");
         return;
       }
 
@@ -353,7 +363,7 @@
       $("gate").hidden = true;
       render(classroom, payload);
     } catch {
-      setConnection("연결 중", "waiting");
+      setSessionState("수업 연결 끊김", "끊김", "waiting");
       setText($("syncStatus"), "연결 끊김");
     } finally {
       requestRunning = false;
@@ -361,6 +371,14 @@
   }
 
   function render(classroom, payload) {
+    if (classroom.ended) {
+      shuttingDown = true;
+      setSessionState("세션 종료됨", "종료됨", "ended");
+      setText($("syncStatus"), "종료됨");
+      showEndedScene();
+      return;
+    }
+
     const files = Array.isArray(classroom.files) ? classroom.files : [];
 
     // 보던 파일이 사라졌으면 말없이 갈아치우지 않고 알려준다.
@@ -764,6 +782,11 @@ while with yield None True False
     const className = `connection is-${kind}`;
     if (element.className !== className) element.className = className;
     setText(element.querySelector("b"), text);
+  }
+
+  function setSessionState(name, connection, kind) {
+    setText($("className"), name);
+    setConnection(connection, kind);
   }
 
   function shortLanguage(language) {

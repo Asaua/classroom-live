@@ -30,6 +30,7 @@ sealed class ClassroomSession
     private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
     private bool _everStarted;
+    private bool _ended;
     // Visual Studio를 여러 개 열면 각 창의 확장이 전부 자기 활성 파일을 보낸다.
     // 한 창만 '주인'으로 두지 않으면 교수 화면과 학생 화면이 창 사이를 오가며 깜빡인다.
     private string? _ownerInstance;
@@ -96,9 +97,20 @@ sealed class ClassroomSession
     {
         lock (_gate)
         {
+            if (_ended) return;
             _broadcasting = enabled;
             // 처음 켜는 것과 멈췄다 다시 켜는 것을 화면에서 구분하려고 기억해둔다.
             if (enabled) _everStarted = true;
+        }
+    }
+
+    /// <summary>정상 종료를 학생에게 알린다. 한 번 끝난 세션은 다시 방송하지 않는다.</summary>
+    public void End()
+    {
+        lock (_gate)
+        {
+            _ended = true;
+            _broadcasting = false;
         }
     }
 
@@ -435,6 +447,7 @@ sealed class ClassroomSession
         _professorActiveLine,
         _viewers.Count,
         _broadcasting,
+        _ended,
         // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
         // 학생 커서 밑에서 계속 맨 위로 튄다.
         _files.Values.Where(include)
@@ -541,6 +554,7 @@ sealed record ClassroomSnapshot(
     int? ProfessorActiveLine,
     int Viewers,
     bool Broadcasting,
+    bool Ended,
     SharedFile[] Files);
 
 sealed record HostSnapshot(
@@ -813,6 +827,14 @@ static class SecurityRules
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));
         Assert(session.GetSnapshot().Files[0].Content.Contains("Update"), "재개하면 다시 갱신된다");
         Assert(session.GetSnapshot().ProfessorActiveLine == 7, "재개하면 교수 위치도 따라온다");
+
+        var endedSession = new ClassroomSession();
+        endedSession.SetBroadcasting(true);
+        endedSession.End();
+        endedSession.SetBroadcasting(true);
+        var ended = endedSession.GetSnapshot();
+        Assert(ended.Ended, "정상 종료 상태가 학생에게 전달된다");
+        Assert(!ended.Broadcasting, "끝난 세션은 다시 방송되지 않는다");
 
         // 교수가 ×로 내리면 확장에 409로 알려서 단축키 한 번에 다시 공유되게 한다.
         var fileId = session.GetSnapshot().Files[0].Id;

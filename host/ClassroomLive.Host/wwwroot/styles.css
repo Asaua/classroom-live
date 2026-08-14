@@ -86,6 +86,7 @@ button, input { font: inherit }
 }
 .connection.is-waiting { color: #f5c45a; border-color: rgba(245, 196, 90, .25); background: rgba(245, 196, 90, .09) }
 .connection.is-paused { color: #aab5c2; border-color: #3b4450; background: #171b21 }
+.connection.is-ended { color: #ff8f8f; border-color: rgba(255, 112, 112, .28); background: rgba(255, 112, 112, .09) }
 .viewer-count { color: var(--muted); font-size: 13px }
 .viewer-count b { color: var(--text) }
 .mobile-files { display: none }
@@ -336,6 +337,30 @@ button, input { font: inherit }
 }
 .secondary-button.is-danger { border-color: #6d2f3a; background: #2a1a1f; color: #f0a8b2 }
 .secondary-button.is-danger:hover { border-color: #93414f; background: #3a222a; color: #ffc4cd }
+
+/* 수업이 끝났을 때 덮는 마지막 화면. 토스트로 스쳐 지나가면 놓치기 쉬워서
+   화면을 통째로 덮고 천천히 떠오르게 한다. 되돌아갈 곳이 없으니 닫는 버튼도 없다.
+   전환은 CSS에 맡긴다. 손으로 보간하는 것보다 부드럽고, 동작 줄이기 설정을 켠
+   사용자에게는 아래 prefers-reduced-motion 규칙이 알아서 즉시 표시로 바꿔준다. */
+.ended {
+  position: fixed; z-index: 70; inset: 0;
+  display: grid; place-items: center;
+  padding: 24px;
+  background: rgba(6, 8, 11, .93);
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  transition: opacity 900ms cubic-bezier(.4, 0, .2, 1);
+}
+.ended.is-visible { opacity: 1 }
+.ended-copy {
+  text-align: center;
+  transform: translateY(10px);
+  transition: transform 900ms cubic-bezier(.4, 0, .2, 1);
+}
+.ended.is-visible .ended-copy { transform: none }
+.ended .brand-mark { margin: 0 auto 20px; opacity: .55; box-shadow: none }
+.ended h1 { margin: 0; font-size: 26px; font-weight: 750; letter-spacing: -.03em }
+.ended p { margin: 10px 0 0; color: var(--muted); font-size: 13px }
 
 .gate { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(5, 7, 9, .86); backdrop-filter: blur(12px) }
 .gate-card { width: min(390px, 100%); padding: 30px; border: 1px solid #2a313b; border-radius: 18px; background: #11151a; box-shadow: 0 30px 90px rgba(0, 0, 0, .45) }

@@ -167,12 +167,7 @@ app.MapPost("/api/host/shutdown", (HttpContext context, ClassroomSession session
     if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
         return Results.Unauthorized();
 
-    // 응답을 먼저 보내고 종료한다. 바로 멈추면 브라우저가 성공을 확인하지 못한다.
-    _ = Task.Run(async () =>
-    {
-        await Task.Delay(300);
-        lifetime.StopApplication();
-    });
+    ScheduleShutdown(session, lifetime);
     return Results.Ok();
 });
 
@@ -295,11 +290,7 @@ app.MapPost("/api/extension/shutdown", (HttpContext context, ClassroomSession se
 {
     if (!IsLocalExtension(context, session)) return Results.NotFound();
 
-    _ = Task.Run(async () =>
-    {
-        await Task.Delay(300);
-        lifetime.StopApplication();
-    });
+    ScheduleShutdown(session, lifetime);
     return Results.Ok();
 });
 
@@ -419,6 +410,18 @@ static string[] GetStudentUrls(int port, string pin)
         .ToArray();
 
     return addresses.Length > 0 ? addresses : [$"http://localhost:{port}/?pin={pin}"];
+}
+
+static void ScheduleShutdown(ClassroomSession session, IHostApplicationLifetime lifetime)
+{
+    // 학생 화면이 다음 폴링에서 "종료됨"을 받은 뒤 서버를 내린다.
+    // 폴링 간격(0.75초)의 두 배면 한 번의 지연이 있어도 전달할 수 있다.
+    session.End();
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(1500);
+        lifetime.StopApplication();
+    });
 }
 
 static bool IsVirtualAdapter(string name) =>
