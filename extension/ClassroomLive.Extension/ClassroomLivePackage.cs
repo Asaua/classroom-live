@@ -42,6 +42,12 @@ namespace ClassroomLive.Extension
         private const int ActiveIntervalMs = 600;
         private const int IdleIntervalMs = 5000;
         private const int FailuresBeforeIdle = 3;
+        private const uint MessageBoxYesNo = 0x00000004;
+        private const uint MessageBoxIconWarning = 0x00000030;
+        private const uint MessageBoxDefaultNo = 0x00000100;
+        private const int MessageBoxYes = 6;
+        // .NET Framework 4.7.2의 HttpStatusCode에는 422 이름이 없다.
+        private const HttpStatusCode UnprocessableEntity = (HttpStatusCode)422;
 
         private static readonly Guid CommandSet = new Guid("0FC38C23-09B7-4C95-89F5-BEB7321757E4");
         private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
@@ -216,12 +222,17 @@ namespace ClassroomLive.Extension
                 }
                 else
                 {
-                    sharedFiles.Add(update.FilePath);
                     update.Action = "share";
-                    var result = await PostAsync(update);
-                    SetStatus(result.Status == HttpStatusCode.OK
-                        ? "Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유"
-                        : "Classroom Live · 호스트 실행 대기");
+                    var result = await PostWithSensitiveConfirmationAsync(update);
+                    if (result.Status == HttpStatusCode.OK)
+                    {
+                        sharedFiles.Add(update.FilePath);
+                        SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유");
+                    }
+                    else
+                    {
+                        SetStatus("Classroom Live · " + ReplyError(result));
+                    }
                 }
             });
         }
@@ -270,8 +281,13 @@ namespace ClassroomLive.Extension
 
                     // 교수 화면에서 공유 해제한 파일은 호스트가 409로 알려준다.
                     // 여기서 목록을 맞춰야 다음 동기화에 되살아나지 않는다.
-                    if (result.Status == HttpStatusCode.Conflict && path != null)
+                    if ((result.Status == HttpStatusCode.Conflict ||
+                         result.Status == UnprocessableEntity) && path != null)
+                    {
                         sharedFiles.Remove(path);
+                        if (result.Status == UnprocessableEntity)
+                            SetStatus("Classroom Live · " + ReplyError(result));
+                    }
 
                     ApplyReply(result);
                     UpdateInterval(result.Status.HasValue);
@@ -309,10 +325,17 @@ namespace ClassroomLive.Extension
             {
                 var update = CaptureActiveFile(includeContent: true);
                 if (update == null) return;
-                sharedFiles.Add(update.FilePath);
                 update.Action = "share";
-                await PostAsync(update);
-                SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유");
+                var result = await PostWithSensitiveConfirmationAsync(update);
+                if (result.Status == HttpStatusCode.OK)
+                {
+                    sharedFiles.Add(update.FilePath);
+                    SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유");
+                }
+                else
+                {
+                    SetStatus("Classroom Live · " + ReplyError(result));
+                }
             }
             else if (command == "unshare" && sharedFiles.Remove(path))
             {
@@ -431,6 +454,33 @@ namespace ClassroomLive.Extension
             }
         }
 
+        private async Task<PostResult> PostWithSensitiveConfirmationAsync(ExtensionUpdate update)
+        {
+            var result = await PostAsync(update);
+            if (result.Status != UnprocessableEntity || result.Reply == null ||
+                string.IsNullOrEmpty(result.Reply.Warning)) return result;
+
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            var answer = MessageBoxW(IntPtr.Zero,
+                result.Reply.Warning + "\n\n파일: " + Path.GetFileName(update.FilePath),
+                "Classroom Live · 민감 정보 확인",
+                MessageBoxYesNo | MessageBoxIconWarning | MessageBoxDefaultNo);
+            if (answer != MessageBoxYes) return result;
+
+            update.AllowSensitive = true;
+            return await PostAsync(update);
+        }
+
+        private static string ReplyError(PostResult result)
+        {
+            if (result.Reply != null)
+            {
+                if (!string.IsNullOrEmpty(result.Reply.Warning)) return "공유를 취소했습니다";
+                if (!string.IsNullOrEmpty(result.Reply.BlockReason)) return result.Reply.BlockReason;
+            }
+            return result.Status.HasValue ? "공유하지 못했습니다" : "호스트 실행 대기";
+        }
+
         /// <summary>실행/종료/멈춤처럼 파일과 무관한 조작.</summary>
         private static async Task<bool> PostControlAsync(string path, string body)
         {
@@ -458,7 +508,6 @@ namespace ClassroomLive.Extension
 
         private static async Task<HostReply> ReadReplyAsync(HttpResponseMessage response)
         {
-            if (!response.IsSuccessStatusCode) return null;
             try
             {
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -489,6 +538,7 @@ namespace ClassroomLive.Extension
             [DataMember(Name = "everStarted")] public bool EverStarted { get; set; }
             [DataMember(Name = "shareable")] public bool Shareable { get; set; }
             [DataMember(Name = "blockReason")] public string BlockReason { get; set; }
+            [DataMember(Name = "warning")] public string Warning { get; set; }
             [DataMember(Name = "shared")] public bool Shared { get; set; }
             [DataMember(Name = "hidden")] public bool Hidden { get; set; }
         }
@@ -583,7 +633,11 @@ namespace ClassroomLive.Extension
             [DataMember] public string SolutionRoot { get; set; }
             [DataMember] public string Content { get; set; }
             [DataMember] public int ActiveLine { get; set; }
+            [DataMember] public bool AllowSensitive { get; set; }
         }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int MessageBoxW(IntPtr owner, string text, string caption, uint type);
 
         [ComImport]
         [Guid("04A72314-32E9-48E2-9B87-A63603454F3E")]

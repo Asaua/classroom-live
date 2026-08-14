@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Threading.RateLimiting;
 
 // 터미널에서 실행됐으면 그 콘솔에 붙는다. 더블클릭이면 창 없이 조용히 시작한다.
 HostConsole.TryAttach();
@@ -41,9 +42,62 @@ var port = int.TryParse(Environment.GetEnvironmentVariable("CLASSROOM_LIVE_PORT"
     : 5050;
 
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+// 코드 100만 글자를 JSON/UTF-8로 보낼 수 있게 하되 Kestrel 기본 30MB보다 훨씬 작게 막는다.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 8 * 1024 * 1024);
 builder.Services.AddSingleton<ClassroomSession>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("student-state", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromSeconds(10),
+            QueueLimit = 0
+        }));
+});
 
 var app = builder.Build();
+
+// 이 앱은 코드와 세션 토큰을 다룬다. 프레임 삽입과 브라우저/프록시 저장을 막는다.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        var headers = context.Response.Headers;
+        headers["Content-Security-Policy"] =
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
+            "img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+        headers["X-Frame-Options"] = "DENY";
+        headers["X-Content-Type-Options"] = "nosniff";
+        headers["Referrer-Policy"] = "no-referrer";
+        headers["Cache-Control"] = "no-store, private";
+        headers["Pragma"] = "no-cache";
+        return Task.CompletedTask;
+    });
+    await next();
+});
+
+// Minimal API 매개변수는 핸들러 진입 전에 JSON으로 변환된다. 이 검사를 미들웨어에
+// 두어 외부의 큰 요청은 본문을 읽기 전에 끊는다.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/extension"))
+    {
+        var address = context.Connection.RemoteIpAddress;
+        var session = context.RequestServices.GetRequiredService<ClassroomSession>();
+        if (address is null || !IPAddress.IsLoopback(address) ||
+            !session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault()))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+    }
+    await next();
+});
+
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -75,9 +129,9 @@ app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
     }
 
     session.ClearPinFailures(address);
-    session.RecordViewer(context.Request.Headers["X-Viewer-Id"].FirstOrDefault());
+    session.RecordViewer(address);
     return Results.Json(session.GetSnapshot());
-});
+}).RequireRateLimiting("student-state");
 
 app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
 {
@@ -180,8 +234,10 @@ app.MapPost("/api/extension/update", (HttpContext context, ExtensionUpdateReques
 
     // 교수가 목록에서 뺀 파일이면 409로 알려준다. 확장이 이걸 받아 공유 목록을 정리하므로
     // 해제한 파일이 다음 동기화에 되살아나지 않는다.
-    if (session.ApplyExtensionUpdate(request) == ExtensionUpdateOutcome.Unshared)
-        return Results.Conflict();
+    var outcome = session.ApplyExtensionUpdate(request);
+    if (outcome == ExtensionUpdateOutcome.Unshared) return Results.Conflict();
+    if (outcome is ExtensionUpdateOutcome.NeedsConfirmation or ExtensionUpdateOutcome.Rejected)
+        return Results.Json(session.BuildReply(), statusCode: StatusCodes.Status422UnprocessableEntity);
 
     // 교수 화면에서 누른 명령과 Visual Studio 메뉴가 쓸 상태를 함께 돌려준다.
     return Results.Json(session.BuildReply());
@@ -370,4 +426,6 @@ record ExtensionUpdateRequest(
     string? SolutionRoot,
     string? Content,
     /// <summary>교수가 보고 있는 줄. 확장이 모르면 0.</summary>
-    int ActiveLine);
+    int ActiveLine,
+    /// <summary>민감 내용 경고를 교수가 이번 수업에서 승인했는지.</summary>
+    bool AllowSensitive = false);

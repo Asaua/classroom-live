@@ -92,11 +92,14 @@ Visual Studio가 연결되지 않을 때
 - Visual Studio가 텍스트로 열 수 있는 파일이면 무엇이든 공유할 수 있습니다.
   확장자 제한은 없습니다. Makefile, .gitignore, .go, .rs 전부 됩니다.
 - 다만 아래는 자동으로 막습니다.
-  · 솔루션 폴더 밖의 파일
-  · .git, .vs, bin, obj, node_modules 같은 빌드·도구 폴더
-  · .env, appsettings, secrets.json, 인증서·개인키, *.user
+  · 솔루션 폴더 밖의 파일과 심볼릭 링크·정션을 거친 파일
+  · .git, .vs, bin, obj, node_modules, .aws, .ssh 같은 빌드·도구·자격 증명 폴더
+  · .env, appsettings, nuget.config, launchSettings.json, web.config,
+    gradle.properties, *.tfvars, 인증서·개인키, *.user
   · 내용이 텍스트가 아닌 파일
   막힌 경우에는 왜 막혔는지 화면에 표시됩니다.
+- 일반 코드에서 비밀번호·API 토큰·개인 키처럼 보이는 값을 찾으면 Visual Studio에
+  확인창이 뜹니다. 내용을 확인한 뒤 "예"를 눌러야 그 파일이 공유됩니다.
 - 학생은 파일을 수정하거나 업로드할 수 없습니다.
 - 교수 화면에서 "시작"을 누르기 전에는 파일을 공유하지 않습니다.
 - "멈춤"은 갱신만 세웁니다. 학생에게는 마지막 화면이 그대로 보입니다.

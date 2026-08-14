@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 sealed class ClassroomSession
 {
@@ -12,6 +13,8 @@ sealed class ClassroomSession
     private readonly Dictionary<string, DateTimeOffset> _viewers = [];
     // 교수가 목록에서 내린 파일. 확장이 아직 동기화 중이면 409로 알려 되살아나지 않게 한다.
     private readonly HashSet<string> _unsharedFiles = [];
+    // 내용 경고를 교수가 한 번 승인한 파일. 서버를 다시 켜면 승인은 사라진다.
+    private readonly HashSet<string> _approvedSensitiveFiles = [];
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
     private string? _professorActiveId;
     private string? _professorActiveName;
@@ -20,6 +23,7 @@ sealed class ClassroomSession
     private string? _currentFileId;
     private bool _currentFileShareable;
     private string? _currentFileBlockReason;
+    private string? _currentFileWarning;
     private string? _pendingCommand;
     private DateTimeOffset _pendingCommandAt;
     private bool _broadcasting;
@@ -103,10 +107,14 @@ sealed class ClassroomSession
             _lastExtensionHeartbeat = DateTimeOffset.UtcNow;
 
             var action = request.Action?.ToLowerInvariant();
-            var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) &&
-                                    !string.IsNullOrWhiteSpace(request.SolutionRoot) &&
-                                    SecurityRules.IsShareable(request.FilePath, request.SolutionRoot, request.Content);
+            var blockReason = string.IsNullOrWhiteSpace(request.FilePath)
+                ? null
+                : SecurityRules.BlockReason(request.FilePath, request.SolutionRoot ?? "", request.Content);
+            var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) && blockReason is null;
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
+            var contentWarning = hasSafeActiveFile && request.Content is not null
+                ? SecurityRules.ContentWarning(request.Content)
+                : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
 
             // 교수 화면 버튼과 Visual Studio 메뉴가 쓸 정보. 멈춤 중에도 최신으로 둔다.
@@ -115,9 +123,8 @@ sealed class ClassroomSession
                 ? null
                 : Path.GetFileName(request.FilePath);
             _currentFileShareable = hasSafeActiveFile;
-            _currentFileBlockReason = string.IsNullOrWhiteSpace(request.FilePath) || hasSafeActiveFile
-                ? null
-                : SecurityRules.BlockReason(request.FilePath, request.SolutionRoot ?? "", request.Content);
+            _currentFileBlockReason = blockReason;
+            _currentFileWarning = contentWarning;
             _currentFileId = activeId;
 
             // 숨김은 되돌릴 수 있다. 파일은 목록에 남고 학생 화면에서만 빠진다.
@@ -138,6 +145,7 @@ sealed class ClassroomSession
                     var id = FileId(request.FilePath);
                     _files.Remove(id);
                     _unsharedFiles.Remove(id);
+                    _approvedSensitiveFiles.Remove(id);
                     if (_professorActiveId == id) ClearProfessorPointer();
                 }
                 _visualStudioStatus = "공유 해제됨";
@@ -169,7 +177,21 @@ sealed class ClassroomSession
             {
                 ClearProfessorPointer();
                 _visualStudioStatus = _currentFileBlockReason ?? "공유할 수 없는 파일";
-                return ExtensionUpdateOutcome.Accepted;
+                return ExtensionUpdateOutcome.Rejected;
+            }
+
+            if (contentWarning is not null && !_approvedSensitiveFiles.Contains(activeId!))
+            {
+                if (action == "share" && request.AllowSensitive)
+                {
+                    _approvedSensitiveFiles.Add(activeId!);
+                }
+                else
+                {
+                    ClearProfessorPointer();
+                    _visualStudioStatus = contentWarning;
+                    return ExtensionUpdateOutcome.NeedsConfirmation;
+                }
             }
 
             if (_unsharedFiles.Contains(activeId!))
@@ -253,6 +275,7 @@ sealed class ClassroomSession
                 _everStarted,
                 _currentFileShareable,
                 _currentFileBlockReason,
+                _currentFileWarning,
                 CurrentFileIsShared(),
                 CurrentFileIsHidden());
         }
@@ -307,6 +330,7 @@ sealed class ClassroomSession
             // 한 수업에서 이만큼 내릴 일은 없다. 무한정 쌓이는 것만 막는다.
             if (_unsharedFiles.Count > 500) _unsharedFiles.Clear();
             _unsharedFiles.Add(id);
+            _approvedSensitiveFiles.Remove(id);
             _files.Remove(id);
             if (_professorActiveId == id) ClearProfessorPointer();
         }
@@ -386,6 +410,7 @@ sealed class ClassroomSession
                 .MinBy(file => file.UpdatedAt);
             if (oldest is null) break;
             _files.Remove(oldest.Id);
+            _approvedSensitiveFiles.Remove(oldest.Id);
         }
     }
 
@@ -437,12 +462,17 @@ sealed record ExtensionReply(
     bool EverStarted,
     bool Shareable,
     string? BlockReason,
+    string? Warning,
     bool Shared,
     bool Hidden);
 
 enum ExtensionUpdateOutcome
 {
     Accepted,
+    /// <summary>내용에 비밀값이 의심되어 교수의 명시적 확인이 필요하다.</summary>
+    NeedsConfirmation,
+    /// <summary>경로나 파일 종류가 안전 규칙에 걸려 공유하지 않았다.</summary>
+    Rejected,
     /// <summary>교수가 목록에서 내린 파일이라 공유하지 않았다. 확장에 409로 알린다.</summary>
     Unshared
 }
@@ -494,13 +524,23 @@ static class SecurityRules
     private static readonly HashSet<string> BlockedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", ".vs", ".idea", "bin", "obj", "node_modules", "packages", "secrets",
-        ".venv", "venv", "__pycache__", "target"
+        ".venv", "venv", "__pycache__", "target", ".aws", ".azure", ".kube", ".ssh",
+        ".gnupg", ".docker"
+    };
+
+    private static readonly HashSet<string> SecretFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "nuget.config", "launchsettings.json", "web.config", "gradle.properties",
+        "credentials.json", "service-account.json", "local.settings.json", "settings.xml",
+        "application.properties", "application.yml", "application.yaml", "wp-config.php",
+        ".pypirc", "pip.conf", ".git-credentials", ".htpasswd", "google-services.json"
     };
 
     /// <summary>내용이 텍스트여도 학생에게 나가면 안 되는 것.</summary>
     private static readonly HashSet<string> SecretExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".pem", ".key", ".pfx", ".p12", ".crt", ".cer", ".jks", ".keystore", ".ppk", ".asc", ".gpg"
+        ".pem", ".key", ".pfx", ".p12", ".crt", ".cer", ".jks", ".keystore", ".ppk", ".asc", ".gpg",
+        ".kdbx", ".ovpn", ".mobileprovision"
     };
 
     /// <summary>공유할 수 없으면 그 이유를, 공유해도 되면 null을 돌려준다.</summary>
@@ -509,11 +549,22 @@ static class SecurityRules
         if (string.IsNullOrWhiteSpace(solutionRoot)) return "솔루션이 열려 있지 않습니다";
         if ((content?.Length ?? 0) > MaxCharacters) return "파일이 너무 큽니다";
 
-        var fullFile = Path.GetFullPath(filePath);
-        var fullRoot = Path.GetFullPath(solutionRoot);
-        var relative = Path.GetRelativePath(fullRoot, fullFile);
-        if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}"))
-            return "솔루션 폴더 밖의 파일입니다";
+        string fullFile;
+        string fullRoot;
+        string relative;
+        try
+        {
+            fullFile = Path.GetFullPath(filePath);
+            fullRoot = Path.GetFullPath(solutionRoot);
+            relative = Path.GetRelativePath(fullRoot, fullFile);
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}"))
+                return "솔루션 폴더 밖의 파일입니다";
+            if (ContainsReparsePoint(fullFile, fullRoot)) return "링크를 거친 파일은 공유할 수 없습니다";
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return "파일 경로를 확인할 수 없습니다";
+        }
 
         var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
@@ -528,15 +579,65 @@ static class SecurityRules
     public static bool IsShareable(string filePath, string solutionRoot, string? content) =>
         BlockReason(filePath, solutionRoot, content) is null;
 
+    /// <summary>
+    /// 소스 안의 비밀값 후보는 오탐 가능성이 있으므로 차단하지 않고 교수에게 한 번 확인받는다.
+    /// 실제 값은 응답이나 로그에 넣지 않는다.
+    /// </summary>
+    public static string? ContentWarning(string content)
+    {
+        if (content.Contains("-----BEGIN PRIVATE KEY-----", Ignore) ||
+            content.Contains("-----BEGIN RSA PRIVATE KEY-----", Ignore) ||
+            content.Contains("-----BEGIN OPENSSH PRIVATE KEY-----", Ignore))
+            return "개인 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?";
+
+        var patterns = new (string Pattern, string Message)[]
+        {
+            (@"\bAKIA[0-9A-Z]{16}\b", "AWS 액세스 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
+            (@"\bgh[pousr]_[A-Za-z0-9]{20,}\b", "GitHub 토큰처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
+            (@"\bsk-[A-Za-z0-9_-]{20,}\b", "API 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
+            ("(?im)\\b(password|passwd|client_secret|api_key|access_token)\\b\\s*[:=]\\s*['\"][^'\"\\r\\n]{8,}['\"]",
+                "비밀번호나 토큰처럼 보이는 값이 있습니다. 그래도 공유할까요?")
+        };
+
+        try
+        {
+            foreach (var candidate in patterns)
+                if (Regex.IsMatch(content, candidate.Pattern, RegexOptions.CultureInvariant,
+                        TimeSpan.FromMilliseconds(100)))
+                    return candidate.Message;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "민감 정보 검사를 완료하지 못했습니다. 그래도 공유할까요?";
+        }
+
+        return null;
+    }
+
     private static bool IsSecretName(string name) =>
         name.Equals(".env", Ignore) || name.StartsWith(".env.", Ignore) ||
         name.StartsWith("appsettings", Ignore) ||
         name.Equals("secrets.json", Ignore) ||
+        SecretFileNames.Contains(name) ||
         name.Equals(".npmrc", Ignore) || name.Equals(".netrc", Ignore) ||
         name.StartsWith("id_rsa", Ignore) || name.StartsWith("id_ed25519", Ignore) ||
+        name.StartsWith("firebase-adminsdk", Ignore) ||
         name.EndsWith(".user", Ignore) ||
         name.EndsWith(".pubxml", Ignore) ||
+        name.EndsWith(".tfvars", Ignore) || name.EndsWith(".tfvars.json", Ignore) ||
+        name.EndsWith(".tfstate", Ignore) || name.EndsWith(".tfstate.backup", Ignore) ||
         SecretExtensions.Contains(Path.GetExtension(name));
+
+    private static bool ContainsReparsePoint(string fullFile, string fullRoot)
+    {
+        FileSystemInfo? current = new FileInfo(fullFile);
+        while (current is not null && !current.FullName.Equals(fullRoot, Ignore))
+        {
+            if (current.Exists && current.Attributes.HasFlag(FileAttributes.ReparsePoint)) return true;
+            current = current is FileInfo file ? file.Directory : ((DirectoryInfo)current).Parent;
+        }
+        return false;
+    }
 
     /// <summary>
     /// 이진 파일을 소스 편집기로 억지로 연 경우를 잡는 마지막 그물.
@@ -614,13 +715,24 @@ static class SecurityRules
         Assert(!Ok("server.pem"), "인증서 차단");
         Assert(!Ok("id_rsa"), "개인키 차단");
         Assert(!Ok("Project.csproj.user"), "사용자 설정 차단");
+        foreach (var name in new[]
+                 {
+                     "nuget.config", "launchSettings.json", "web.config", "gradle.properties",
+                     "terraform.tfvars", "credentials.json", "service-account.json"
+                 })
+            Assert(!Ok(name), $"민감 설정 파일 차단: {name}");
         Assert(!Ok(Path.Combine("bin", "Generated.cs")), "빌드 폴더 차단");
+        Assert(!Ok(Path.Combine(".aws", "credentials")), "자격 증명 폴더 차단");
         Assert(!Ok(Path.Combine("node_modules", "index.js")), "의존성 폴더 차단");
         Assert(!IsShareable(Path.Combine(root, "Huge.cs"), root, Text(MaxCharacters + 1)), "대용량 파일 차단");
         // 이진 파일을 소스 편집기로 억지로 연 경우.
         Assert(!IsShareable(Path.Combine(root, "logo.png"), root, "\u0089PNG\0\u001a"), "내용이 이진이면 차단");
         Assert(BlockReason(Path.Combine(root, ".env"), root, Text()) == "비밀이 들어 있을 수 있는 파일입니다",
             "막힌 이유를 알려준다");
+        Assert(ContentWarning("const api_key = \"sk-123456789012345678901234\";") is not null,
+            "코드 속 API 키 후보 경고");
+        Assert(ContentWarning("var password = ReadPassword();") is null,
+            "값이 없는 비밀번호 처리 코드는 경고하지 않는다");
 
         SessionSelfTest();
     }
@@ -709,6 +821,17 @@ static class SecurityRules
         // 내용을 봐야 아는 경우는 공유를 시도할 때 걸러진다.
         replySession.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", Path.Combine(root, "logo.png"), root, "PNG\0", 0));
         Assert(!replySession.BuildReply().Shared, "내용이 이진이면 공유되지 않는다");
+
+        var sensitive = new ClassroomSession();
+        sensitive.SetBroadcasting(true);
+        var sensitiveContent = "const api_key = \"sk-123456789012345678901234\";";
+        Assert(sensitive.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, sensitiveContent, 1))
+            == ExtensionUpdateOutcome.NeedsConfirmation, "민감 내용은 확인 전 공유하지 않는다");
+        Assert(sensitive.GetSnapshot().Files.Length == 0, "확인 전 민감 내용은 학생에게 보내지 않는다");
+        Assert(sensitive.BuildReply().Warning is not null, "민감 내용 경고를 확장에 전달한다");
+        Assert(sensitive.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, sensitiveContent, 1, true))
+            == ExtensionUpdateOutcome.Accepted, "교수가 확인하면 민감 내용을 공유한다");
+        Assert(sensitive.GetSnapshot().Files.Length == 1, "확인한 민감 내용은 학생이 볼 수 있다");
 
         // 유휴 종료가 엉뚱할 때 서버를 내리면 수업이 끊긴다. 두 안전장치를 확인한다.
         var fresh = new ClassroomSession();

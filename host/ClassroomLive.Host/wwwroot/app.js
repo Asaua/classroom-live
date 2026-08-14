@@ -37,15 +37,6 @@
   let currentContent = "";
   let noticeTimer = 0;
 
-  // crypto.randomUUID는 보안 컨텍스트(HTTPS 또는 localhost)에서만 존재한다.
-  // 학생은 http://192.168.x.x 로 접속하므로 그대로 호출하면 여기서 예외가 나고
-  // 아래 코드가 통째로 실행되지 않아 빈 화면만 보인다.
-  const newViewerId = () =>
-    globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  const viewerId = localStorage.getItem("classroom-live:viewer") || newViewerId();
-  localStorage.setItem("classroom-live:viewer", viewerId);
-
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
 
@@ -318,7 +309,7 @@
         cache: "no-store",
         headers: isHost
           ? { "X-Admin-Token": adminToken }
-          : { "X-Classroom-Pin": pin, "X-Viewer-Id": viewerId },
+          : { "X-Classroom-Pin": pin },
       });
 
       if (!response.ok) {
