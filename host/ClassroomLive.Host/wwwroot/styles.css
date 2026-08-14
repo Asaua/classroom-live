@@ -249,8 +249,20 @@ button, input { font: inherit }
 .tool-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
 
 .file-panel { display: flex; min-height: 0; flex-direction: column }
-.panel-heading { justify-content: space-between; padding: 20px; border-bottom: 1px solid var(--soft) }
+.panel-heading { justify-content: space-between; gap: 12px; padding: 20px; border-bottom: 1px solid var(--soft) }
 .panel-heading h2 { margin: 0; font-size: 17px; letter-spacing: -.03em }
+.panel-tools { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px }
+.add-file-label { min-width: 0; max-width: 145px; overflow: hidden; color: #9ba6b3; font: 11px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap }
+.add-file {
+  width: 28px; height: 28px; flex: 0 0 auto;
+  border: 1px solid #35404c; border-radius: 7px;
+  background: #1a2027; color: #dbe3eb;
+  font-size: 20px; line-height: 1; cursor: pointer;
+}
+.add-file:hover { border-color: var(--accent); color: var(--accent) }
+.add-file:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
+.add-file:disabled { opacity: .42; cursor: default }
+.add-file.is-active { border-color: #344127; color: var(--accent) }
 .file-count { min-width: 26px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: #20252d; color: #a7b2bf; font-size: 11px; font-weight: 750 }
 .file-list { flex: 1; overflow-y: auto; padding: 9px }
 .file-item { width: 100%; min-height: 60px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text) }
@@ -384,7 +396,7 @@ button, input { font: inherit }
   .mobile-files { display: block; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #151920; color: #c7ced7; font-size: 11px }
   .host-controls { min-height: 84px; align-items: flex-start; padding: 10px 16px }
   .host-state { display: block }
-  .host-state .pin { display: inline-block; margin-top: 7px }
+  .host-state .pin, .host-state #copyLink { display: inline-block; margin-top: 7px }
   .host-actions { align-self: center }
   .workspace { display: block; padding: 8px }
   .editor-card { height: 100% }
@@ -410,7 +422,7 @@ button, input { font: inherit }
   .connection { height: 26px; padding: 0 8px }
   .host-controls { gap: 8px }
   .host-state strong { font-size: 11px }
-  /* 버튼이 4개다. 세로로 쌓으면 코드 볼 자리가 없어진다. */
+  /* 버튼을 세로로 쌓으면 코드 볼 자리가 없어진다. */
   .host-actions { display: grid; grid-template-columns: 1fr 1fr }
   .host-actions button { min-height: 30px; padding: 0 9px; font-size: 10px }
   .notice { left: 8px; right: 8px; bottom: 12px; max-width: none; transform: none }

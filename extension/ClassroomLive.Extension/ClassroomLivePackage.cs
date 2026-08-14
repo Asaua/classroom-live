@@ -274,14 +274,15 @@ namespace ClassroomLive.Extension
                 try
                 {
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
-                    var path = ActiveFilePath();
-                    // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
-                    // UI 스레드를 붙잡을 이유가 없다.
-                    var isShared = isOwner && path != null && sharedFiles.Contains(path);
-                    var update = CaptureActiveFile(includeContent: isShared) ?? new ExtensionUpdate
+                    var update = CaptureActiveFile(includeContent: false) ?? new ExtensionUpdate
                     {
                         Action = "heartbeat"
                     };
+                    var path = update.FilePath;
+                    // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
+                    // UI 스레드를 붙잡을 이유가 없다.
+                    var isShared = isOwner && path != null && sharedFiles.Contains(path);
+                    if (isShared) update = CaptureActiveFile(includeContent: true) ?? update;
                     update.Action = isShared ? "sync" : "heartbeat";
                     var result = await PostAsync(update);
 

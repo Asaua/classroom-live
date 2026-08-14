@@ -22,6 +22,7 @@ sealed class ClassroomSession
     private string? _professorActiveName;
     private int? _professorActiveLine;
     private string? _currentFileName;
+    private string? _currentFileDisplayPath;
     private string? _currentFileId;
     private bool _currentFileShareable;
     private string? _currentFileBlockReason;
@@ -156,6 +157,9 @@ sealed class ClassroomSession
             _currentFileName = string.IsNullOrWhiteSpace(request.FilePath)
                 ? null
                 : Path.GetFileName(request.FilePath);
+            _currentFileDisplayPath = hasSafeActiveFile
+                ? DisplayPath(request.FilePath!, request.SolutionRoot!)
+                : _currentFileName;
             _currentFileShareable = hasSafeActiveFile;
             _currentFileBlockReason = blockReason;
             _currentFileWarning = contentWarning;
@@ -190,7 +194,9 @@ sealed class ClassroomSession
             {
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
-                _visualStudioStatus = "일시정지 · 학생은 마지막 화면을 봐요";
+                _visualStudioStatus = _everStarted
+                    ? "일시정지 · 학생은 마지막 화면을 봐요"
+                    : "시작 전 · 아직 학생에게 전송하지 않아요";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -426,6 +432,7 @@ sealed class ClassroomSession
             return new HostSnapshot(Snapshot(_ => true), _broadcasting, _everStarted, connected,
                 connected ? _visualStudioStatus : "Visual Studio 연결 대기",
                 connected ? _currentFileName : null,
+                connected ? _currentFileDisplayPath : null,
                 connected && _currentFileShareable,
                 connected ? _currentFileBlockReason : null,
                 connected && CurrentFileIsShared(),
@@ -440,6 +447,17 @@ sealed class ClassroomSession
     private bool CurrentFileIsHidden() =>
         _currentFileId is not null && _files.TryGetValue(_currentFileId, out var file) && file.Hidden;
 
+    private static string DisplayPath(string filePath, string solutionRoot)
+    {
+        try
+        {
+            var rootName = Path.GetFileName(Path.TrimEndingDirectorySeparator(solutionRoot));
+            var relative = Path.GetRelativePath(solutionRoot, filePath).Replace('\\', '/');
+            return string.IsNullOrEmpty(rootName) ? relative : $"{rootName}/{relative}";
+        }
+        catch { return Path.GetFileName(filePath); }
+    }
+
     private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include) => new(
         "수업 중",
         _professorActiveId,
@@ -447,6 +465,7 @@ sealed class ClassroomSession
         _professorActiveLine,
         _viewers.Count,
         _broadcasting,
+        _everStarted,
         _ended,
         // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
         // 학생 커서 밑에서 계속 맨 위로 튄다.
@@ -554,6 +573,7 @@ sealed record ClassroomSnapshot(
     int? ProfessorActiveLine,
     int Viewers,
     bool Broadcasting,
+    bool EverStarted,
     bool Ended,
     SharedFile[] Files);
 
@@ -566,6 +586,7 @@ sealed record HostSnapshot(
     string VisualStudioStatus,
     /// <summary>Visual Studio에서 지금 열려 있는 파일. 공유 여부와 무관하다.</summary>
     string? CurrentFileName,
+    string? CurrentFileDisplayPath,
     bool CurrentFileShareable,
     /// <summary>공유할 수 없을 때 그 이유. 공유 가능하면 null.</summary>
     string? CurrentFileBlockReason,
@@ -808,6 +829,12 @@ static class SecurityRules
             new("sync", file, root, content, line);
 
         var session = new ClassroomSession();
+        session.ApplyExtensionUpdate(Sync("class Player {}", 1));
+        var waitingHost = session.GetHostSnapshot([]);
+        Assert(waitingHost.VisualStudioStatus.StartsWith("시작 전"),
+            "방송 전 상태를 일시정지라고 표시하지 않는다");
+        Assert(waitingHost.CurrentFileDisplayPath == "Solution/Scripts/Player.cs",
+            "현재 파일을 솔루션 기준 경로로 표시한다");
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 3));
 
@@ -822,6 +849,8 @@ static class SecurityRules
         Assert(frozen.Files.Length == 1, "멈춰도 학생 화면은 남는다");
         Assert(frozen.Files[0].Content == "class Player {}", "멈춤 중에는 내용이 갱신되지 않는다");
         Assert(frozen.ProfessorActiveLine == 3, "멈춤 중에는 교수 위치도 움직이지 않는다");
+        Assert(session.GetHostSnapshot([]).VisualStudioStatus.StartsWith("일시정지"),
+            "한 번 시작한 뒤 멈추면 일시정지로 표시한다");
 
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));

@@ -99,19 +99,20 @@
   });
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
-    const enabled = button.dataset.shared !== "1";
+    if (button.dataset.shared === "1") return;
+    if (latestHostState?.broadcasting !== true) return notify("먼저 수업을 시작해 주세요");
     // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
-    if (enabled && button.dataset.shareable !== "1")
+    if (button.dataset.shareable !== "1")
       return notify(button.dataset.reason || "공유할 수 없는 파일이에요");
     button.disabled = true;
     try {
       const response = await fetch("/api/host/share", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled: true }),
       });
       notify(response.ok
-        ? (enabled ? "공유했어요" : "공유를 해제했어요")
+        ? "공유를 요청했어요"
         : "요청에 실패했어요");
     } catch {
       notify("확장에 연결하지 못했어요");
@@ -400,19 +401,20 @@
     selectedName = selected?.name || "";
 
     const live = classroom.broadcasting;
-    setText($("className"), classroom.className);
+    const started = Boolean(classroom.everStarted);
+    setSessionState(live ? "수업 중" : started ? "수업 일시정지" : "수업 시작 전",
+      live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : "paused");
     setText($("viewerCount"), String(classroom.viewers));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
-    const professorName = classroom.professorActiveName || professor?.name || (live ? "없음" : "일시정지");
+    const professorName = classroom.professorActiveName || professor?.name ||
+      (live ? "없음" : started ? "일시정지" : "시작 전");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
 
     // 아직 한 번도 시작하지 않은 상태를 일시정지라고 부르면 거짓말이 된다.
-    const started = isHost ? Boolean(payload.everStarted) : classroom.files.length > 0;
     setText($("syncStatus"), live ? "실시간" : !started ? "시작 전" : "일시정지");
-    setConnection(live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : "paused");
 
     if (selected) {
       setText($("fileName"), selected.name);
@@ -758,25 +760,33 @@ while with yield None True False
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
-    // Visual Studio로 돌아가지 않아도 여기서 공유를 켜고 끌 수 있다.
-    // 숨김은 공유 파일 목록의 눈 아이콘이 담당한다. 여기 두면 같은 기능이 두 곳에 생긴다.
+    // 현재 Visual Studio 파일을 공유 목록의 +로 추가한다. 제거는 각 파일의 ×가 담당한다.
     const share = $("toggleShare");
+    const label = $("addFileLabel");
     const current = payload.currentFileName;
     share.hidden = !current;
+    label.hidden = !current;
     if (!current) return;
 
     const shared = Boolean(payload.currentFileShared);
     const shareable = Boolean(payload.currentFileShareable);
-    setText(share, shared ? `${current} 공유 해제` : `${current} 공유`);
+    const displayPath = payload.currentFileDisplayPath || current;
+    const canAdd = payload.broadcasting && shareable && !shared;
+    setText(label, `${current} ${shared ? "추가됨" : payload.broadcasting ? "추가" : "시작 후 추가"}`);
+    setTitle(label, displayPath);
+    setText(share, shared ? "✓" : "+");
     const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
-    setTitle(share, shared
-      ? "공유 목록에서 제외합니다"
-      : shareable ? "학생에게 이 파일을 보여줍니다" : reason);
+    const action = shared ? "공유 목록에 추가된 파일입니다"
+      : !payload.broadcasting ? "수업을 시작한 뒤 추가할 수 있습니다"
+      : shareable ? "공유 목록에 추가합니다" : reason;
+    share.setAttribute("aria-label", `${displayPath} ${action}`);
+    setTitle(share, action);
     share.classList.toggle("is-active", shared);
     share.classList.toggle("is-blocked", !shared && !shareable);
     share.dataset.shared = shared ? "1" : "0";
     share.dataset.shareable = shareable ? "1" : "0";
     share.dataset.reason = shareable ? "" : reason;
+    share.disabled = !canAdd;
   }
 
   function setConnection(text, kind) {
