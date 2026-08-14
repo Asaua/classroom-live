@@ -251,10 +251,11 @@ app.MapPost("/api/extension/update", (HttpContext context, ExtensionUpdateReques
     var outcome = session.ApplyExtensionUpdate(request);
     if (outcome == ExtensionUpdateOutcome.Unshared) return Results.Conflict();
     if (outcome is ExtensionUpdateOutcome.NeedsConfirmation or ExtensionUpdateOutcome.Rejected)
-        return Results.Json(session.BuildReply(request.InstanceId), statusCode: StatusCodes.Status422UnprocessableEntity);
+        return Results.Json(session.BuildReply(request.InstanceId, request.FilePath, request.SolutionRoot),
+            statusCode: StatusCodes.Status422UnprocessableEntity);
 
     // 교수 화면에서 누른 명령과 Visual Studio 메뉴가 쓸 상태를 함께 돌려준다.
-    return Results.Json(session.BuildReply(request.InstanceId));
+    return Results.Json(session.BuildReply(request.InstanceId, request.FilePath, request.SolutionRoot));
 });
 
 app.MapDelete("/api/host/files/{id}", (HttpContext context, string id, ClassroomSession session) =>

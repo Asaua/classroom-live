@@ -296,10 +296,18 @@ namespace ClassroomLive.Extension
                     }
 
                     ApplyReply(result);
+                    // 호스트 응답은 이 창이 보낸 파일 기준이다. 다른 창에서 먼저 공유한
+                    // 파일도 알아야 주인이 넘어왔을 때 곧바로 내용 동기화를 시작한다.
+                    if (result.Status == HttpStatusCode.OK && result.Reply != null && path != null)
+                    {
+                        if (result.Reply.Shared) sharedFiles.Add(path);
+                        else sharedFiles.Remove(path);
+                    }
                     UpdateInterval(result.Status.HasValue);
 
                     // 교수 화면 버튼으로 내린 명령. Visual Studio로 돌아오지 않아도 동작한다.
-                    if (result.Reply != null && result.Reply.Command != null && path != null)
+                    if (result.Reply != null && result.Reply.Owner &&
+                        result.Reply.Command != null && path != null)
                         await RunHostCommandAsync(result.Reply.Command, path);
                 }
                 finally

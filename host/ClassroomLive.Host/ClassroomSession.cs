@@ -287,21 +287,43 @@ sealed class ClassroomSession
     /// 확장이 폴링할 때마다 돌려주는 상태. Visual Studio 메뉴가 이걸로 글자와
     /// 활성 여부를 정한다. 별도 조회 없이 기존 통로에 실어 보낸다.
     /// </summary>
-    public ExtensionReply BuildReply(string? instanceId = null)
+    public ExtensionReply BuildReply(string? instanceId = null, string? filePath = null,
+        string? solutionRoot = null)
     {
         lock (_gate)
         {
             var instance = string.IsNullOrWhiteSpace(instanceId) ? "unknown" : instanceId!;
+            var owner = _ownerInstance is null || _ownerInstance == instance;
+            var shareable = _currentFileShareable;
+            var blockReason = _currentFileBlockReason;
+            var warning = _currentFileWarning;
+            var shared = CurrentFileIsShared();
+            var hidden = CurrentFileIsHidden();
+
+            // 비주인 창에는 주인 창의 파일 상태가 아니라 그 창이 보낸 파일 상태를 돌려준다.
+            // 그렇지 않으면 정상 파일에 다른 창의 .env 차단 이유가 뜨거나 버튼 동작이 뒤집힌다.
+            if (!owner)
+            {
+                blockReason = string.IsNullOrWhiteSpace(filePath)
+                    ? null
+                    : SecurityRules.BlockReason(filePath, solutionRoot ?? "", null);
+                shareable = !string.IsNullOrWhiteSpace(filePath) && blockReason is null;
+                var fileId = shareable ? FileId(filePath!) : null;
+                shared = fileId is not null && _files.ContainsKey(fileId);
+                hidden = fileId is not null && _files.TryGetValue(fileId, out var file) && file.Hidden;
+                warning = null;
+            }
+
             return new ExtensionReply(
-                _ownerInstance is null || _ownerInstance == instance,
-                TakePendingCommand(),
+                owner,
+                owner ? TakePendingCommand() : null,
                 _broadcasting,
                 _everStarted,
-                _currentFileShareable,
-                _currentFileBlockReason,
-                _currentFileWarning,
-                CurrentFileIsShared(),
-                CurrentFileIsHidden());
+                shareable,
+                blockReason,
+                warning,
+                shared,
+                hidden);
         }
     }
 
@@ -850,6 +872,9 @@ static class SecurityRules
         multi.ApplyExtensionUpdate(From("win-2", "sync", fileB, "class B {}"));
         Assert(multi.GetSnapshot().ProfessorActiveName == "A.cs", "다른 창의 폴링은 무시된다");
         Assert(multi.GetHostSnapshot([]).CurrentFileName == "A.cs", "현재 파일 표시도 흔들리지 않는다");
+        var windowBState = multi.BuildReply("win-2", fileB, root);
+        Assert(windowBState.Shareable && !windowBState.Shared,
+            "비주인 창도 자기 활성 파일의 공유 상태를 받는다");
 
         // 주인 창의 폴링은 그대로 반영된다.
         multi.ApplyExtensionUpdate(From("win-1", "sync", fileA, "class A { int x; }"));
@@ -860,6 +885,20 @@ static class SecurityRules
         Assert(multi.BuildReply("win-2").Owner, "직접 조작하면 주인이 넘어간다");
         Assert(!multi.BuildReply("win-1").Owner, "이전 주인은 주인이 아니게 된다");
         Assert(multi.GetSnapshot().ProfessorActiveName == "B.cs", "넘겨받은 창이 화면을 몬다");
+
+        // 교수 화면의 현재 파일 명령은 주인 창만 가져가야 한다.
+        multi.RequestShare(true);
+        Assert(multi.BuildReply("win-1", fileA, root).Command is null,
+            "비주인 창은 교수 화면 명령을 가져가지 않는다");
+        Assert(multi.BuildReply("win-2", fileB, root).Command == "share",
+            "교수 화면 명령은 주인 창에 전달된다");
+
+        // 주인 창의 차단 상태가 다른 창의 정상 파일에 묻어나면 공유 버튼이 막힌다.
+        var secret = Path.Combine(root, ".env");
+        multi.ApplyExtensionUpdate(From("win-1", "share", secret, "PASSWORD=secret"));
+        var isolatedState = multi.BuildReply("win-2", fileB, root);
+        Assert(isolatedState.Shareable && isolatedState.BlockReason is null,
+            "각 창은 자기 활성 파일의 차단 상태를 받는다");
 
         // 확장 메뉴가 쓰는 상태가 그대로 전달되는지.
         var replySession = new ClassroomSession();
