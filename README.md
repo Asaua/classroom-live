@@ -6,6 +6,13 @@
 
 인터넷을 거치지 않습니다. 같은 와이파이 안에서만 동작합니다.
 
+## 지원 환경
+
+- Windows 10/11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
+- macOS, Linux, Windows ARM64, Visual Studio Code는 지원하지 않습니다.
+- 현재 배포용 호스트는 framework-dependent 빌드이므로 교수 PC에 .NET 10 SDK 또는
+  ASP.NET Core Runtime 10이 설치되어 있어야 합니다.
+
 ## 구성
 
 | 위치 | 역할 |
@@ -85,6 +92,15 @@ msbuild extension\ClassroomLive.Extension\ClassroomLive.Extension.csproj /p:Conf
 | --- | --- | --- |
 | `CLASSROOM_LIVE_PORT` | `5050` | 대기 포트. 확장은 핸드셰이크 파일에서 자동으로 읽습니다 |
 | `CLASSROOM_LIVE_NO_BROWSER` | – | `1`이면 시작할 때 브라우저를 열지 않습니다 |
+
+처음 실행할 때 Windows의 네트워크 액세스 알림이 나타나면 **개인 네트워크와 공용
+네트워크를 모두 허용**하세요. 한쪽을 해제해 생긴 차단 규칙은 허용 규칙보다 우선합니다.
+잘못 선택했거나 학생이 접속하지 못하면 교수 화면의 **방화벽 허용**을 다시 눌러 관련
+차단 규칙을 정리하세요. 이 버튼은 사설 IP 대역에서 ClassroomLive.exe의 TCP 포트만
+허용합니다.
+
+학교 와이파이에 AP 격리 또는 클라이언트 격리가 적용된 경우에는 Windows 방화벽을
+허용해도 기기끼리 접속할 수 없습니다.
 
 ## 교수가 쓰는 두 화면
 
