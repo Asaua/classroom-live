@@ -60,14 +60,14 @@
         <div class="empty-state" id="emptyState">
           <span aria-hidden="true">{ }</span>
           <h2>공유된 파일이 없어요</h2>
-          <p>교수님이 시작하면 코드가 나타나요.</p>
+          <p>교수님이 파일을 공유하면 코드가 나타나요.</p>
         </div>
         <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" tabindex="0" hidden>
           <div class="code-lines" id="codeLines"></div>
         </div>
 
         <footer class="statusbar">
-          <span class="status-live"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 중</span></span>
+          <span class="status-live is-waiting" id="statusLive"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 중</span></span>
           <span class="status-meta" id="language">Text</span>
           <span class="status-meta" id="lineCount">0줄</span>
           <div class="viewer-tools">

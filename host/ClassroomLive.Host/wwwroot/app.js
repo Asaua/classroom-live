@@ -196,7 +196,9 @@
 
   async function copyAndFlash(url) {
     const button = $("copyLink");
-    button.textContent = await copyText(url) ? "복사됨" : "복사 실패";
+    const copied = await copyText(url);
+    button.textContent = copied ? "복사됨" : "복사 실패";
+    notify(copied ? "주소를 복사했어요" : "복사하지 못했어요");
     setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
   }
 
@@ -375,7 +377,7 @@
       shuttingDown = true;
       setSessionState("세션 종료됨", "종료됨", "ended");
       setText($("syncStatus"), "종료됨");
-      showEndedScene();
+      if (isHost) showEndedScene();
       return;
     }
 
@@ -751,8 +753,8 @@ while with yield None True False
     setText(broadcastButton, payload.broadcasting
       ? "일시정지"
       : payload.everStarted ? "재개" : "시작");
-    // 진행(시작·재개)은 강조색, 멈춤은 경고색. 같은 색이면 무엇을 누르는지 알 수 없다.
-    broadcastButton.classList.toggle("is-pause", payload.broadcasting);
+    // 재개만 노란색으로 구분하고 시작·일시정지는 기본 초록색을 쓴다.
+    broadcastButton.classList.toggle("is-resume", !payload.broadcasting && payload.everStarted);
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
@@ -768,7 +770,7 @@ while with yield None True False
     setText(share, shared ? `${current} 공유 해제` : `${current} 공유`);
     const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
     setTitle(share, shared
-      ? "학생 목록에서 뺍니다"
+      ? "공유 목록에서 제외합니다"
       : shareable ? "학생에게 이 파일을 보여줍니다" : reason);
     share.classList.toggle("is-active", shared);
     share.classList.toggle("is-blocked", !shared && !shareable);
@@ -781,6 +783,7 @@ while with yield None True False
     const element = $("connection");
     const className = `connection is-${kind}`;
     if (element.className !== className) element.className = className;
+    $("statusLive").className = `status-live is-${kind}`;
     setText(element.querySelector("b"), text);
   }
 
