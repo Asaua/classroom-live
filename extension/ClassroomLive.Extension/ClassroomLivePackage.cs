@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -12,6 +13,8 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DialogResult = System.Windows.Forms.DialogResult;
+using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
 using Task = System.Threading.Tasks.Task;
 
 namespace ClassroomLive.Extension
@@ -42,6 +45,8 @@ namespace ClassroomLive.Extension
         private const int IdleIntervalMs = 5000;
         private const int FailuresBeforeIdle = 3;
         private const uint MessageBoxYesNo = 0x00000004;
+        private const uint MessageBoxOk = 0x00000000;
+        private const uint MessageBoxIconError = 0x00000010;
         private const uint MessageBoxIconWarning = 0x00000030;
         private const uint MessageBoxDefaultNo = 0x00000100;
         private const int MessageBoxYes = 6;
@@ -154,23 +159,92 @@ namespace ClassroomLive.Extension
                 return;
             }
 
-            var exe = HostHandshake.InstalledExecutable();
+            var exe = HostHandshake.InstalledExecutable() ?? ChooseHostExecutable();
             if (string.IsNullOrEmpty(exe))
             {
-                SetStatus("Classroom Live · ClassroomLive.exe를 한 번 직접 실행해 주세요");
+                SetStatus("Classroom Live · 실행을 취소했습니다");
                 return;
             }
 
             try
             {
-                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+                using (var process = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }))
+                {
+                    if (process == null) throw new InvalidOperationException("프로세스를 시작하지 못했습니다.");
+                }
                 SetStatus("Classroom Live · 실행 중");
                 SetInterval(ActiveIntervalMs);
             }
             catch (Exception exception)
             {
-                SetStatus("Classroom Live · 실행하지 못했습니다: " + exception.Message);
+                ShowLaunchError(exe, exception.Message);
+                return;
             }
+
+            _ = JoinableTaskFactory.RunAsync(() => WaitForHostAsync(exe));
+        }
+
+        private async Task WaitForHostAsync(string exe)
+        {
+            // Process.Start 성공은 서버 준비 성공을 뜻하지 않는다. 런타임 누락처럼
+            // 프로세스가 곧바로 끝나는 경우까지 잡으려고 실제 응답을 기다린다.
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                await Task.Delay(250).ConfigureAwait(false);
+                var result = await PostAsync(new ExtensionUpdate { Action = "heartbeat" }).ConfigureAwait(false);
+                if (!result.ReachedHost) continue;
+
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                ApplyReply(result);
+                SetStatus("Classroom Live · 실행했습니다");
+                return;
+            }
+
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            ShowLaunchError(exe, "10초 안에 서버 응답을 받지 못했습니다.");
+        }
+
+        private string ChooseHostExecutable()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            using (var dialog = new OpenFileDialog
+            {
+                Title = "ClassroomLive.exe 선택",
+                Filter = "Classroom Live (ClassroomLive.exe)|ClassroomLive.exe",
+                FileName = "ClassroomLive.exe",
+                CheckFileExists = true,
+                Multiselect = false,
+                RestoreDirectory = true
+            })
+            {
+                if (dialog.ShowDialog() != DialogResult.OK) return null;
+                if (!HostHandshake.IsClassroomLiveExecutable(dialog.FileName))
+                {
+                    ShowLaunchError(dialog.FileName, "ClassroomLive.exe 파일만 선택할 수 있습니다.");
+                    return null;
+                }
+
+                try
+                {
+                    HostHandshake.RememberExecutable(dialog.FileName);
+                    return Path.GetFullPath(dialog.FileName);
+                }
+                catch (Exception exception)
+                {
+                    ShowLaunchError(dialog.FileName, "실행 경로를 저장하지 못했습니다.\n" + exception.Message);
+                    return null;
+                }
+            }
+        }
+
+        private void ShowLaunchError(string path, string reason)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var message = "Classroom Live를 실행하지 못했습니다.\n\n" +
+                          "경로: " + path + "\n\n" + reason;
+            SetStatus("Classroom Live · 실행하지 못했습니다");
+            MessageBoxW(IntPtr.Zero, message, "Classroom Live · 실행 오류",
+                MessageBoxOk | MessageBoxIconError);
         }
 
         private void TogglePause(object sender, EventArgs e)
@@ -300,7 +374,7 @@ namespace ClassroomLive.Extension
                         if (result.Reply.Shared) sharedFiles.Add(path);
                         else sharedFiles.Remove(path);
                     }
-                    UpdateInterval(result.Status.HasValue);
+                    UpdateInterval(result.ReachedHost);
 
                     // 교수 화면 버튼으로 내린 명령. Visual Studio로 돌아오지 않아도 동작한다.
                     if (result.Reply != null && result.Reply.Owner &&
@@ -316,7 +390,7 @@ namespace ClassroomLive.Extension
 
         private void ApplyReply(PostResult result)
         {
-            hostReachable = result.Status.HasValue;
+            hostReachable = result.ReachedHost;
             if (result.Reply == null) return;
 
             isOwner = result.Reply.Owner;
@@ -453,16 +527,25 @@ namespace ClassroomLive.Extension
                 {
                     request.Headers.Add("X-Extension-Token", handshake.Token);
                     using (var response = await Client.SendAsync(request).ConfigureAwait(false))
+                    {
+                        if (!IsClassroomLiveResponse(response))
+                        {
+                            HostHandshake.Invalidate(handshake, invalidIdentity: true);
+                            return new PostResult();
+                        }
+
                         return new PostResult
                         {
+                            ReachedHost = true,
                             Status = response.StatusCode,
                             Reply = await ReadReplyAsync(response).ConfigureAwait(false)
                         };
+                    }
                 }
             }
             catch
             {
-                HostHandshake.Invalidate();
+                HostHandshake.Invalidate(handshake, invalidIdentity: false);
                 return new PostResult();
             }
         }
@@ -509,14 +592,29 @@ namespace ClassroomLive.Extension
                 {
                     request.Headers.Add("X-Extension-Token", handshake.Token);
                     using (var response = await Client.SendAsync(request).ConfigureAwait(false))
+                    {
+                        if (!IsClassroomLiveResponse(response))
+                        {
+                            HostHandshake.Invalidate(handshake, invalidIdentity: true);
+                            return false;
+                        }
                         return response.IsSuccessStatusCode;
+                    }
                 }
             }
             catch
             {
-                HostHandshake.Invalidate();
+                HostHandshake.Invalidate(handshake, invalidIdentity: false);
                 return false;
             }
+        }
+
+        private static bool IsClassroomLiveResponse(HttpResponseMessage response)
+        {
+            IEnumerable<string> values;
+            return response.StatusCode != HttpStatusCode.NotFound &&
+                   response.Headers.TryGetValues("X-Classroom-Live", out values) &&
+                   values.Contains("1");
         }
 
         private static async Task<HostReply> ReadReplyAsync(HttpResponseMessage response)
@@ -539,6 +637,7 @@ namespace ClassroomLive.Extension
 
         private sealed class PostResult
         {
+            public bool ReachedHost { get; set; }
             public HttpStatusCode? Status { get; set; }
             public HostReply Reply { get; set; }
         }
@@ -565,11 +664,13 @@ namespace ClassroomLive.Extension
         private sealed class HostHandshake
         {
             private static readonly TimeSpan CacheFor = TimeSpan.FromSeconds(2);
+            private static readonly object Gate = new object();
             private static HostHandshake cached;
             private static DateTime readAt;
 
             [DataMember(Name = "port")] public int Port { get; set; }
             [DataMember(Name = "token")] public string Token { get; set; }
+            [DataMember(Name = "pid")] public int ProcessId { get; set; }
 
             private static string Folder
             {
@@ -583,35 +684,40 @@ namespace ClassroomLive.Extension
 
             public static HostHandshake Load()
             {
-                if (cached != null && DateTime.UtcNow - readAt < CacheFor) return cached;
-                readAt = DateTime.UtcNow;
-                try
+                lock (Gate)
                 {
-                    var path = Path.Combine(Folder, "host.json");
-                    if (!File.Exists(path)) return cached = null;
-                    using (var stream = File.OpenRead(path))
+                    if (cached != null && DateTime.UtcNow - readAt < CacheFor &&
+                        IsProcessAlive(cached.ProcessId)) return cached;
+                    readAt = DateTime.UtcNow;
+                    try
                     {
-                        var serializer = new DataContractJsonSerializer(typeof(HostHandshake));
-                        var handshake = serializer.ReadObject(stream) as HostHandshake;
-                        return cached = (handshake != null && handshake.Port > 0 &&
-                                         !string.IsNullOrEmpty(handshake.Token))
-                            ? handshake
-                            : null;
+                        var handshake = ReadHandshake();
+                        if (handshake != null && handshake.Port > 0 &&
+                            !string.IsNullOrEmpty(handshake.Token) && IsProcessAlive(handshake.ProcessId))
+                            return cached = handshake;
+
+                        cached = null;
+                        if (handshake != null) DeleteIfCurrent(handshake);
+                        return null;
+                    }
+                    catch
+                    {
+                        return cached = null;
                     }
                 }
-                catch
+            }
+
+            /// <summary>응답하지 않은 정보가 아직 디스크의 현재 값일 때만 지운다.</summary>
+            public static void Invalidate(HostHandshake failed, bool invalidIdentity)
+            {
+                lock (Gate)
                 {
-                    return cached = null;
+                    cached = null;
+                    if (invalidIdentity || !IsProcessAlive(failed.ProcessId)) DeleteIfCurrent(failed);
                 }
             }
 
-            /// <summary>호스트가 재시작하면 포트·토큰이 바뀌므로 다음 호출에서 다시 읽는다.</summary>
-            public static void Invalidate()
-            {
-                cached = null;
-            }
-
-            /// <summary>"실행"이 켤 실행 파일. 호스트가 한 번이라도 돌았으면 남아 있다.</summary>
+            /// <summary>"실행"이 켤 실행 파일. 없거나 잘못됐으면 선택창을 다시 띄운다.</summary>
             public static string InstalledExecutable()
             {
                 try
@@ -622,14 +728,91 @@ namespace ClassroomLive.Extension
                     {
                         var serializer = new DataContractJsonSerializer(typeof(InstallInfo));
                         var info = serializer.ReadObject(stream) as InstallInfo;
-                        if (info == null || string.IsNullOrEmpty(info.Executable)) return null;
-                        return File.Exists(info.Executable) ? info.Executable : null;
+                        if (info == null || !IsClassroomLiveExecutable(info.Executable))
+                        {
+                            TryDelete(path);
+                            return null;
+                        }
+                        return Path.GetFullPath(info.Executable);
                     }
                 }
                 catch
                 {
                     return null;
                 }
+            }
+
+            public static bool IsClassroomLiveExecutable(string path)
+            {
+                try
+                {
+                    return !string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
+                           string.Equals(Path.GetFileName(path), "ClassroomLive.exe",
+                               StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            public static void RememberExecutable(string executable)
+            {
+                if (!IsClassroomLiveExecutable(executable))
+                    throw new ArgumentException("ClassroomLive.exe 경로가 아닙니다.", nameof(executable));
+
+                Directory.CreateDirectory(Folder);
+                var path = Path.Combine(Folder, "install.json");
+                var info = new InstallInfo { Executable = Path.GetFullPath(executable) };
+                using (var stream = File.Create(path))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(InstallInfo));
+                    serializer.WriteObject(stream, info);
+                }
+            }
+
+            private static HostHandshake ReadHandshake()
+            {
+                var path = Path.Combine(Folder, "host.json");
+                if (!File.Exists(path)) return null;
+                using (var stream = File.OpenRead(path))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(HostHandshake));
+                    return serializer.ReadObject(stream) as HostHandshake;
+                }
+            }
+
+            private static bool IsProcessAlive(int processId)
+            {
+                if (processId <= 0) return false;
+                try
+                {
+                    using (var process = Process.GetProcessById(processId))
+                        return !process.HasExited;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private static void DeleteIfCurrent(HostHandshake expected)
+            {
+                try
+                {
+                    var current = ReadHandshake();
+                    if (current == null || current.Port != expected.Port ||
+                        current.ProcessId != expected.ProcessId ||
+                        !string.Equals(current.Token, expected.Token, StringComparison.Ordinal)) return;
+                    TryDelete(Path.Combine(Folder, "host.json"));
+                }
+                catch { }
+            }
+
+            private static void TryDelete(string path)
+            {
+                try { File.Delete(path); }
+                catch { }
             }
         }
 

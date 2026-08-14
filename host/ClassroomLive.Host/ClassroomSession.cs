@@ -522,7 +522,8 @@ static class HostHandshake
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         // 토큰은 16진수라 JSON 이스케이프가 필요 없다.
-        File.WriteAllText(FilePath, $"{{\"port\":{port},\"token\":\"{extensionToken}\"}}");
+        File.WriteAllText(FilePath,
+            $"{{\"port\":{port},\"token\":\"{extensionToken}\",\"pid\":{Environment.ProcessId}}}");
     }
 
     public static void Delete()
@@ -537,8 +538,26 @@ static class HostHandshake
 
     public static void RememberInstall(string executablePath)
     {
+        if (!IsClassroomLiveExecutable(executablePath))
+            throw new ArgumentException("ClassroomLive.exe 경로가 아닙니다.", nameof(executablePath));
+
         Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
-        File.WriteAllText(InstallPath, $"{{\"exe\":{System.Text.Json.JsonSerializer.Serialize(executablePath)}}}");
+        File.WriteAllText(InstallPath,
+            $"{{\"exe\":{System.Text.Json.JsonSerializer.Serialize(Path.GetFullPath(executablePath))}}}");
+    }
+
+    public static bool IsClassroomLiveExecutable(string? path)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
+                   string.Equals(Path.GetFileName(path), "ClassroomLive.exe",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 

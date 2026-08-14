@@ -71,6 +71,8 @@ app.Use(async (context, next) =>
             "img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
         headers["X-Frame-Options"] = "DENY";
         headers["X-Content-Type-Options"] = "nosniff";
+        // 확장은 이 값으로 오래된 host.json이 가리키는 엉뚱한 서비스를 거른다.
+        headers["X-Classroom-Live"] = "1";
         headers["Referrer-Policy"] = "no-referrer";
         headers["Cache-Control"] = "no-store, private";
         headers["Pragma"] = "no-cache";
@@ -298,7 +300,7 @@ app.MapPost("/api/extension/shutdown", (HttpContext context, ClassroomSession se
 // 핸드셰이크 파일과 달리 종료해도 남겨둔다.
 try
 {
-    if (Environment.ProcessPath is { } exePath) HostHandshake.RememberInstall(exePath);
+    if (FindHostExecutable() is { } exePath) HostHandshake.RememberInstall(exePath);
 }
 catch { /* 위치를 못 남겨도 수업 진행에는 지장이 없다. */ }
 
@@ -389,6 +391,18 @@ finally
 }
 
 return 0;
+
+static string? FindHostExecutable()
+{
+    // framework-dependent 실행을 `dotnet ClassroomLive.dll`로 시작하면 ProcessPath는
+    // dotnet.exe다. 그 값을 저장하면 Visual Studio의 실행 버튼이 아무 인자 없는
+    // dotnet.exe를 켜게 되므로 실제 apphost만 기억한다.
+    if (HostHandshake.IsClassroomLiveExecutable(Environment.ProcessPath))
+        return Path.GetFullPath(Environment.ProcessPath!);
+
+    var appHost = Path.Combine(AppContext.BaseDirectory, "ClassroomLive.exe");
+    return HostHandshake.IsClassroomLiveExecutable(appHost) ? Path.GetFullPath(appHost) : null;
+}
 
 static string[] GetStudentUrls(int port, string pin)
 {
