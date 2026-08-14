@@ -195,7 +195,7 @@ sealed class ClassroomSession
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
                 _visualStudioStatus = _everStarted
-                    ? "일시정지 · 학생은 마지막 화면을 봐요"
+                    ? "일시정지 · 코드 갱신을 멈췄어요"
                     : "시작 전 · 아직 학생에게 전송하지 않아요";
                 return ExtensionUpdateOutcome.Accepted;
             }
@@ -458,19 +458,26 @@ sealed class ClassroomSession
         catch { return Path.GetFileName(filePath); }
     }
 
-    private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include) => new(
-        "수업 중",
-        _professorActiveId,
-        _professorActiveName,
-        _professorActiveLine,
-        _viewers.Count,
-        _broadcasting,
-        _everStarted,
-        _ended,
+    private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include)
+    {
         // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
         // 학생 커서 밑에서 계속 맨 위로 튄다.
-        _files.Values.Where(include)
-            .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray());
+        var files = _files.Values.Where(include)
+            .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+        var activeIsVisible = _professorActiveId is not null &&
+            files.Any(file => file.Id == _professorActiveId);
+
+        return new ClassroomSnapshot(
+            "수업 중",
+            activeIsVisible ? _professorActiveId : null,
+            activeIsVisible ? _professorActiveName : null,
+            activeIsVisible ? _professorActiveLine : null,
+            _viewers.Count,
+            _broadcasting,
+            _everStarted,
+            _ended,
+            files);
+    }
 
     private void PruneViewers()
     {
@@ -835,6 +842,16 @@ static class SecurityRules
             "방송 전 상태를 일시정지라고 표시하지 않는다");
         Assert(waitingHost.CurrentFileDisplayPath == "Solution/Scripts/Player.cs",
             "현재 파일을 솔루션 기준 경로로 표시한다");
+
+        var privateSession = new ClassroomSession();
+        privateSession.SetBroadcasting(true);
+        privateSession.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+            "heartbeat", Path.Combine(root, "Scripts", "Private.cs"), root, null, 1));
+        Assert(privateSession.GetSnapshot().ProfessorActiveName is null,
+            "공유하지 않은 활성 파일 이름은 학생에게 보내지 않는다");
+        Assert(privateSession.GetHostSnapshot([]).CurrentFileName == "Private.cs",
+            "공유하지 않은 활성 파일도 교수 화면에는 표시한다");
+
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 3));
 

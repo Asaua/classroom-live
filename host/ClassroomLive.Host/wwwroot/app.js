@@ -772,14 +772,14 @@ while with yield None True False
     const shareable = Boolean(payload.currentFileShareable);
     const displayPath = payload.currentFileDisplayPath || current;
     const canAdd = payload.broadcasting && shareable && !shared;
-    setText(label, `${current} ${shared ? "추가됨" : payload.broadcasting ? "추가" : "시작 후 추가"}`);
+    setText(label, current);
     setTitle(label, displayPath);
     setText(share, shared ? "✓" : "+");
     const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
-    const action = shared ? "공유 목록에 추가된 파일입니다"
-      : !payload.broadcasting ? "수업을 시작한 뒤 추가할 수 있습니다"
-      : shareable ? "공유 목록에 추가합니다" : reason;
-    share.setAttribute("aria-label", `${displayPath} ${action}`);
+    const action = shared ? `${current}은(는) 이미 추가되어 있습니다`
+      : !payload.broadcasting ? `${current}은(는) 수업 시작 후 추가할 수 있습니다`
+      : shareable ? `${current}을(를) 추가합니다` : reason;
+    share.setAttribute("aria-label", action);
     setTitle(share, action);
     share.classList.toggle("is-active", shared);
     share.classList.toggle("is-blocked", !shared && !shareable);
