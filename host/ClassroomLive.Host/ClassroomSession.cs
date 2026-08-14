@@ -709,7 +709,8 @@ static class SecurityRules
     public static string LanguageFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
         ".cs" or ".cshtml" or ".razor" => "C#",
-        ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => "C++",
+        ".c" or ".h" => "C",
+        ".cpp" or ".cc" or ".cxx" or ".hpp" or ".hxx" => "C++",
         ".js" or ".jsx" or ".mjs" or ".cjs" => "JavaScript",
         ".ts" or ".tsx" => "TypeScript",
         ".py" => "Python",

@@ -101,11 +101,17 @@ button, input { font: inherit }
 .host-state { gap: 18px; min-width: 0 }
 .host-state .eyebrow { margin: 0 }
 .host-state strong { min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap }
-.pin { flex: 0 0 auto; padding: 6px 9px; border: 1px solid #2b3324; border-radius: 7px; color: #97a389; font-size: 11px }
+.pin { flex: 0 0 auto; padding: 6px 9px; border: 1px solid #2b3324; border-radius: 7px; background: transparent; color: #97a389; font-size: 11px; cursor: pointer }
+.pin:hover { border-color: #46543a; color: #b6c2a6 }
+.pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
 .pin b { margin-left: 5px; color: var(--accent); letter-spacing: .12em }
 .host-actions { gap: 8px }
 .primary-button, .secondary-button { min-height: 36px; padding: 0 14px; border-radius: 8px; font-weight: 700; cursor: pointer }
+/* 시작·재개는 진행, 일시정지는 멈춤. 같은 색이면 무엇을 누르는 버튼인지 알 수 없다. */
 .primary-button { border: 1px solid var(--accent); background: var(--accent); color: #111609 }
+.primary-button.is-pause { border-color: #f5c45a; background: #f5c45a; color: #241b06 }
+/* 종료 뒤에는 서버가 없어 아무 버튼도 동작하지 않는다. 눌러볼 수 있게 두지 않는다. */
+.primary-button:disabled, .secondary-button:disabled, .pin:disabled { opacity: .4; cursor: default }
 .secondary-button { border: 1px solid #343c46; background: #171c22; color: #d6dce4 }
 
 .workspace {
@@ -145,7 +151,6 @@ button, input { font: inherit }
 .file-icon { width: 31px; height: 31px; border-radius: 7px; font-size: 9px }
 .file-title-row { gap: 9px; min-width: 0 }
 .file-title-row h1 { min-width: 0; margin: 0; overflow: hidden; font-size: 15px; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap }
-.file-title-row span { flex: 0 0 auto; padding: 3px 7px; border-radius: 5px; background: #20262f; color: #aab4c1; font-size: 10px; font-weight: 700 }
 .file-heading p { margin: 4px 0 0; overflow: hidden; color: var(--muted); font: 11px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap }
 .professor-now { flex: 0 0 auto; padding-left: 18px; border-left: 1px solid var(--line) }
 .eyebrow { display: block; margin-bottom: 5px; color: var(--muted-small); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase }

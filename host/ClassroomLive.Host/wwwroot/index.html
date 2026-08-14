@@ -29,8 +29,7 @@
       <div class="host-state">
         <strong id="hostStatus">연결 대기</strong>
         <button class="tool-button" id="toggleShare" type="button" hidden>현재 파일 공유</button>
-        <button class="tool-button" id="toggleHide" type="button" hidden>숨김</button>
-        <span class="pin">PIN <b id="pinValue">------</b></span>
+        <button class="pin" id="copyPin" type="button" title="눌러서 PIN 복사">PIN <b id="pinValue">------</b></button>
       </div>
       <div class="host-actions">
         <button class="secondary-button" id="allowFirewall" type="button" title="같은 와이파이의 학생이 접속할 수 있게 합니다">방화벽 허용</button>
@@ -48,7 +47,6 @@
             <div class="file-heading-copy">
               <div class="file-title-row">
                 <h1 id="fileName">파일 없음</h1>
-                <span>내 화면</span>
               </div>
               <p id="filePath">교수님이 공유하면 여기에 나타나요.</p>
             </div>

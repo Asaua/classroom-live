@@ -121,10 +121,10 @@
     await refresh();
   });
 
-  $("toggleHide").addEventListener("click", async () => {
-    const id = $("toggleHide").dataset.fileId;
-    if (!id) return;
-    await setHidden(id, $("toggleHide").dataset.hidden !== "1");
+  $("copyPin").addEventListener("click", async () => {
+    const pinValue = $("pinValue").textContent.trim();
+    if (!pinValue || pinValue.startsWith("-")) return;
+    notify(await copyText(pinValue) ? "PIN을 복사했어요" : "복사하지 못했어요");
   });
 
   $("shutdown").addEventListener("click", async () => {
@@ -139,7 +139,11 @@
     // 자동으로 사라지면 안 된다. 종료됐다는 사실이 화면에 남아 있어야 한다.
     popup("종료했어요. 탭을 닫아도 돼요", [{ label: "확인" }]);
     setConnection("종료", "paused");
-    setText($("hostStatus"), "종료");
+    setText($("hostStatus"), "종료됨");
+    // 서버가 없으므로 이 버튼들은 이제 아무것도 하지 못한다.
+    // 누를 수 있게 두면 눌러보고 아무 일도 안 일어나는 것을 겪게 된다.
+    for (const id of ["toggleBroadcast", "shutdown", "allowFirewall", "copyLink", "toggleShare", "copyPin"])
+      $(id).disabled = true;
   });
 
   $("allowFirewall").addEventListener("click", async () => {
@@ -387,10 +391,7 @@
 
     // 아직 한 번도 시작하지 않은 상태를 일시정지라고 부르면 거짓말이 된다.
     const started = isHost ? Boolean(payload.everStarted) : classroom.files.length > 0;
-    setText($("syncStatus"), live
-      ? "실시간"
-      : !started ? "시작 전"
-      : isHost ? "일시정지 · 학생은 마지막 화면을 봐요" : "일시정지 · 마지막 화면");
+    setText($("syncStatus"), live ? "실시간" : !started ? "시작 전" : "일시정지");
     setConnection(live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : "paused");
 
     if (selected) {
@@ -728,18 +729,20 @@ while with yield None True False
   function renderHost(payload) {
     setText($("pinValue"), payload.pin);
     // 한 번도 시작한 적 없으면 "시작", 돌다가 멈췄으면 "재개"로 구분한다.
-    setText($("toggleBroadcast"), payload.broadcasting
+    const broadcastButton = $("toggleBroadcast");
+    setText(broadcastButton, payload.broadcasting
       ? "일시정지"
       : payload.everStarted ? "재개" : "시작");
+    // 진행(시작·재개)은 강조색, 멈춤은 경고색. 같은 색이면 무엇을 누르는지 알 수 없다.
+    broadcastButton.classList.toggle("is-pause", payload.broadcasting);
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
 
-    // Visual Studio로 돌아가지 않아도 여기서 공유와 숨김을 켜고 끌 수 있다.
+    // Visual Studio로 돌아가지 않아도 여기서 공유를 켜고 끌 수 있다.
+    // 숨김은 공유 파일 목록의 눈 아이콘이 담당한다. 여기 두면 같은 기능이 두 곳에 생긴다.
     const share = $("toggleShare");
-    const hide = $("toggleHide");
     const current = payload.currentFileName;
     share.hidden = !current;
-    hide.hidden = !current || !payload.currentFileShared;
     if (!current) return;
 
     const shared = Boolean(payload.currentFileShared);
@@ -754,21 +757,6 @@ while with yield None True False
     share.dataset.shared = shared ? "1" : "0";
     share.dataset.shareable = shareable ? "1" : "0";
     share.dataset.reason = shareable ? "" : reason;
-
-    const hidden = Boolean(payload.currentFileHidden);
-    setText(hide, hidden ? "다시 보이기" : "숨김");
-    setTitle(hide, hidden
-      ? "학생 화면에 다시 보이게 합니다"
-      : "목록에는 두고 학생 화면에서만 감춥니다");
-    hide.classList.toggle("is-active", hidden);
-    hide.dataset.hidden = hidden ? "1" : "0";
-    hide.dataset.fileId = currentFileId(payload);
-  }
-
-  // 현재 파일의 id는 목록에서 이름으로 찾는다. 교수 화면은 숨긴 파일까지 받는다.
-  function currentFileId(payload) {
-    const files = payload.classroom?.files ?? [];
-    return files.find((file) => file.name === payload.currentFileName)?.id ?? "";
   }
 
   function setConnection(text, kind) {
