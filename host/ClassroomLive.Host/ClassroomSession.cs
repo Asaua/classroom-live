@@ -466,12 +466,14 @@ sealed class ClassroomSession
             .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray();
         var activeIsVisible = _professorActiveId is not null &&
             files.Any(file => file.Id == _professorActiveId);
+        var professorAway = _professorActiveName is not null && !activeIsVisible;
 
         return new ClassroomSnapshot(
             "수업 중",
             activeIsVisible ? _professorActiveId : null,
             activeIsVisible ? _professorActiveName : null,
             activeIsVisible ? _professorActiveLine : null,
+            professorAway,
             _viewers.Count,
             _broadcasting,
             _everStarted,
@@ -578,6 +580,7 @@ sealed record ClassroomSnapshot(
     string? ProfessorActiveId,
     string? ProfessorActiveName,
     int? ProfessorActiveLine,
+    bool ProfessorAway,
     int Viewers,
     bool Broadcasting,
     bool EverStarted,
@@ -849,6 +852,8 @@ static class SecurityRules
             "heartbeat", Path.Combine(root, "Scripts", "Private.cs"), root, null, 1));
         Assert(privateSession.GetSnapshot().ProfessorActiveName is null,
             "공유하지 않은 활성 파일 이름은 학생에게 보내지 않는다");
+        Assert(privateSession.GetSnapshot().ProfessorAway,
+            "공유하지 않은 파일을 보고 있으면 자리비움 상태만 학생에게 보낸다");
         Assert(privateSession.GetHostSnapshot([]).CurrentFileName == "Private.cs",
             "공유하지 않은 활성 파일도 교수 화면에는 표시한다");
 

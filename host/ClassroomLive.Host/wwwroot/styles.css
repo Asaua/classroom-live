@@ -84,9 +84,13 @@ button, input { font: inherit }
   background: currentColor;
   box-shadow: 0 0 10px currentColor;
 }
-.connection.is-waiting { color: #f5c45a; border-color: rgba(245, 196, 90, .25); background: rgba(245, 196, 90, .09) }
-.connection.is-paused { color: #aab5c2; border-color: #3b4450; background: #171b21 }
-.connection.is-ended { color: #ff8f8f; border-color: rgba(255, 112, 112, .28); background: rgba(255, 112, 112, .09) }
+.connection.is-live, .status-live.is-live .status-dot, .professor-now strong.is-live i { color: var(--accent) }
+.connection.is-waiting, .status-live.is-waiting .status-dot, .professor-now strong.is-waiting i { color: #aab5c2 }
+.connection.is-paused, .status-live.is-paused .status-dot, .professor-now strong.is-paused i { color: #f5c45a }
+.connection.is-ended, .status-live.is-ended .status-dot, .professor-now strong.is-ended i { color: #ff8f8f }
+.connection.is-waiting { border-color: #3b4450; background: #171b21 }
+.connection.is-paused { border-color: rgba(245, 196, 90, .25); background: rgba(245, 196, 90, .09) }
+.connection.is-ended { border-color: rgba(255, 112, 112, .28); background: rgba(255, 112, 112, .09) }
 .viewer-count { color: var(--muted); font-size: 13px }
 .viewer-count b { color: var(--text) }
 .mobile-files { display: none }
@@ -156,7 +160,7 @@ button, input { font: inherit }
 .professor-now { flex: 0 0 auto; padding-left: 18px; border-left: 1px solid var(--line) }
 .eyebrow { display: block; margin-bottom: 5px; color: var(--muted-small); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase }
 .professor-now strong { gap: 7px; font-size: 12px }
-.professor-now i { color: var(--accent) }
+.professor-now i { color: #aab5c2 }
 
 /* --- 코드 뷰 ------------------------------------------------------------
    줄마다 한 행을 만든다. 줄바꿈을 켜도 줄번호가 어긋나지 않고,
@@ -227,10 +231,6 @@ button, input { font: inherit }
   font-size: 11px;
 }
 .status-live { min-width: 0; display: flex; align-items: center; gap: 7px; overflow: hidden; color: #93a0ae; text-overflow: ellipsis; white-space: nowrap }
-.status-live.is-live .status-dot { color: var(--accent) }
-.status-live.is-waiting .status-dot { color: #f5c45a }
-.status-live.is-paused .status-dot { color: #aab5c2 }
-.status-live.is-ended .status-dot { color: #ff8f8f }
 .status-meta { flex: 0 0 auto }
 .viewer-tools { display: flex; align-items: center; gap: 6px; margin-left: auto }
 .tool-group { display: flex; gap: 4px }

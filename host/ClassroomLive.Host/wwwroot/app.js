@@ -403,13 +403,13 @@
     const live = classroom.broadcasting;
     const started = Boolean(classroom.everStarted);
     setSessionState(live ? "수업 중" : started ? "수업 일시정지" : "수업 시작 전",
-      live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : "paused");
+      live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : started ? "paused" : "waiting");
     setText($("viewerCount"), String(classroom.viewers));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
     const professorName = classroom.professorActiveName || professor?.name ||
-      (live ? "없음" : started ? "일시정지" : "시작 전");
+      (classroom.professorAway ? "자리비움" : live ? "없음" : started ? "일시정지" : "시작 전");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
 
@@ -794,6 +794,7 @@ while with yield None True False
     const className = `connection is-${kind}`;
     if (element.className !== className) element.className = className;
     $("statusLive").className = `status-live is-${kind}`;
+    $("professorFile").parentElement.className = `is-${kind}`;
     setText(element.querySelector("b"), text);
   }
 
