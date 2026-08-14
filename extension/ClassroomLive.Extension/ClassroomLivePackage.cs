@@ -33,7 +33,6 @@ namespace ClassroomLive.Extension
         // vsct의 IDSymbol과 같아야 한다.
         private const int ToggleShareCommandId = 0x0100;
         private const int StartCommandId = 0x0101;
-        private const int StopCommandId = 0x0102;
         private const int TogglePauseCommandId = 0x0103;
         private const int ToggleHideCommandId = 0x0104;
 
@@ -81,8 +80,7 @@ namespace ClassroomLive.Extension
             var commands = await GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
             if (commands != null)
             {
-                Add(commands, StartCommandId, StartHost, QueryStart);
-                Add(commands, StopCommandId, StopHost, QueryStop);
+                Add(commands, StartCommandId, ToggleHost, QueryHost);
                 Add(commands, TogglePauseCommandId, TogglePause, QueryPause);
                 Add(commands, ToggleShareCommandId, ToggleShare, QueryShare);
                 Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
@@ -106,16 +104,12 @@ namespace ClassroomLive.Extension
 
         // --- 메뉴 상태 ------------------------------------------------------
 
-        private void QueryStart(object sender, EventArgs e)
+        private void QueryHost(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            ((OleMenuCommand)sender).Enabled = !hostReachable;
-        }
-
-        private void QueryStop(object sender, EventArgs e)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            ((OleMenuCommand)sender).Enabled = hostReachable;
+            var command = (OleMenuCommand)sender;
+            command.Enabled = true;
+            command.Text = hostReachable ? "종료" : "실행";
         }
 
         private void QueryPause(object sender, EventArgs e)
@@ -145,9 +139,21 @@ namespace ClassroomLive.Extension
 
         // --- 명령 ------------------------------------------------------------
 
-        private void StartHost(object sender, EventArgs e)
+        private void ToggleHost(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            if (hostReachable)
+            {
+                _ = JoinableTaskFactory.RunAsync(async delegate
+                {
+                    var ok = await PostControlAsync("shutdown", null);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (ok) hostReachable = false;
+                    SetStatus(ok ? "Classroom Live · 종료했습니다" : "Classroom Live · 종료하지 못했습니다");
+                });
+                return;
+            }
+
             var exe = HostHandshake.InstalledExecutable();
             if (string.IsNullOrEmpty(exe))
             {
@@ -165,16 +171,6 @@ namespace ClassroomLive.Extension
             {
                 SetStatus("Classroom Live · 실행하지 못했습니다: " + exception.Message);
             }
-        }
-
-        private void StopHost(object sender, EventArgs e)
-        {
-            _ = JoinableTaskFactory.RunAsync(async delegate
-            {
-                await JoinableTaskFactory.SwitchToMainThreadAsync();
-                var ok = await PostControlAsync("shutdown", null);
-                SetStatus(ok ? "Classroom Live · 종료했습니다" : "Classroom Live · 종료하지 못했습니다");
-            });
         }
 
         private void TogglePause(object sender, EventArgs e)
@@ -498,7 +494,7 @@ namespace ClassroomLive.Extension
             return result.Status.HasValue ? "공유하지 못했습니다" : "호스트 실행 대기";
         }
 
-        /// <summary>실행/종료/멈춤처럼 파일과 무관한 조작.</summary>
+        /// <summary>실행/종료/일시정지처럼 파일과 무관한 조작.</summary>
         private static async Task<bool> PostControlAsync(string path, string body)
         {
             var handshake = HostHandshake.Load();
