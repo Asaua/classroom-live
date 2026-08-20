@@ -6,13 +6,11 @@ Classroom Live 사용법
 
 - Windows 10/11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
 - macOS, Linux, Windows ARM64, Visual Studio Code는 지원하지 않습니다.
-- ClassroomLive.exe를 실행하려면 교수 PC에 .NET 10 SDK 또는 ASP.NET Core Runtime 10이
-  설치되어 있어야 합니다.
+- VSIX에 Windows x64용 호스트 런타임이 포함되므로 .NET을 따로 설치할 필요가 없습니다.
 
 1. ClassroomLive.Extension.vsix를 한 번 설치합니다. Visual Studio 2019 이상을 지원합니다.
 2. Visual Studio에서 공유할 솔루션을 엽니다.
-3. Classroom Live 툴바의 "실행"을 누릅니다. 처음에는 파일 선택창에서 압축을 푼
-   폴더의 ClassroomLive.exe를 고릅니다. 고른 즉시 실행되며 다음부터는 묻지 않습니다.
+3. Classroom Live 툴바의 "실행"을 누릅니다. VSIX에 포함된 호스트가 바로 실행됩니다.
 4. 처음 한 번 교수 화면에서 "방화벽 허용"을 누르고 관리자 권한 요청을 승인합니다.
 5. 교수 화면에서 "시작"을 누릅니다.
 6. Visual Studio에서 공유할 파일을 열고 도구 > Classroom Live > 현재 파일 공유를
@@ -36,7 +34,7 @@ Visual Studio에서 할 수 있는 것
 교수 화면(브라우저)에서 할 수 있는 일과 같고,
 어느 쪽에서 하든 0.6초 안에 서로 반영됩니다.
 
-- 실행/종료 : ClassroomLive.exe를 켜고 끕니다. 첫 실행 때만 파일 위치를 고릅니다.
+- 실행/종료 : VSIX에 포함된 ClassroomLive.exe를 켜고 끕니다.
 - 시작/일시정지/재개 : 코드 전송을 시작하거나 잠시 멈추고 다시 이어갑니다.
 - 공유    : 지금 열려 있는 파일을 학생에게 보여줍니다. (공유 중이면 "공유 해제")
 - 숨김    : 학생 화면에서만 감춥니다. (숨긴 뒤에는 "다시 보이기")
@@ -82,9 +80,8 @@ Visual Studio가 연결되지 않을 때
 
 - Visual Studio 전체 IDE와 솔루션이 실행 중인지 확인하세요.
 - Visual Studio 확장이 설치되어 있는지 확인하세요.
-- 툴바의 "실행"을 누르고, 처음이라면 올바른 ClassroomLive.exe를 선택하세요.
-  확장은 호스트가 남기는 연결 정보를 읽어 포트를 자동으로 찾습니다. 비정상 종료로
-  오래된 연결 정보가 남아도 자동으로 무시합니다.
+- 툴바의 "실행"을 누르세요. 확장은 내장 호스트가 남기는 연결 정보를 읽어 포트를
+  자동으로 찾습니다. 비정상 종료로 오래된 연결 정보가 남아도 자동으로 무시합니다.
 - 호스트를 껐다 켜면 확장이 다시 붙기까지 몇 초 걸립니다.
 - Visual Studio 2019, 2022, 2026을 지원합니다.
 - Visual Studio Code는 지원하지 않습니다.

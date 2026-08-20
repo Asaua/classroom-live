@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="ClassroomLive.Extension.520905BF-FE2D-4FC7-A9E1-E94F533C3039" Version="1.1.2" Language="ko-KR" Publisher="Classroom Live" />
+    <Identity Id="ClassroomLive.Extension.520905BF-FE2D-4FC7-A9E1-E94F533C3039" Version="1.2.0" Language="ko-KR" Publisher="Asau" />
     <DisplayName>Classroom Live</DisplayName>
     <Description xml:space="preserve">현재 Visual Studio 파일을 Classroom Live 수업에 공유하거나 공유 해제합니다.</Description>
     <Tags>classroom, live, code, teaching</Tags>

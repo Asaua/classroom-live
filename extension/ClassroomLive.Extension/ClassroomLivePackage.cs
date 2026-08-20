@@ -14,14 +14,13 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using DialogResult = System.Windows.Forms.DialogResult;
-using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
+using Process = System.Diagnostics.Process;
 using Task = System.Threading.Tasks.Task;
 
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.0")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -189,10 +188,11 @@ namespace ClassroomLive.Extension
                 return;
             }
 
-            var exe = HostHandshake.InstalledExecutable() ?? ChooseHostExecutable();
-            if (string.IsNullOrEmpty(exe))
+            var exe = BundledHostExecutable();
+            if (exe == null)
             {
-                SetStatus("Classroom Live · 실행을 취소했습니다");
+                ShowLaunchError(Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location) ?? "", "Host", "ClassroomLive.exe"),
+                    "VSIX에 포함된 호스트를 찾지 못했습니다. Classroom Live 확장을 다시 설치해 주세요.");
                 return;
             }
 
@@ -234,37 +234,15 @@ namespace ClassroomLive.Extension
             ShowLaunchError(exe, "10초 안에 서버 응답을 받지 못했습니다.");
         }
 
-        private string ChooseHostExecutable()
+        private static string BundledHostExecutable()
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            using (var dialog = new OpenFileDialog
+            try
             {
-                Title = "ClassroomLive.exe 선택",
-                Filter = "Classroom Live (ClassroomLive.exe)|ClassroomLive.exe",
-                FileName = "ClassroomLive.exe",
-                CheckFileExists = true,
-                Multiselect = false,
-                RestoreDirectory = true
-            })
-            {
-                if (dialog.ShowDialog() != DialogResult.OK) return null;
-                if (!HostHandshake.IsClassroomLiveExecutable(dialog.FileName))
-                {
-                    ShowLaunchError(dialog.FileName, "ClassroomLive.exe 파일만 선택할 수 있습니다.");
-                    return null;
-                }
-
-                try
-                {
-                    HostHandshake.RememberExecutable(dialog.FileName);
-                    return Path.GetFullPath(dialog.FileName);
-                }
-                catch (Exception exception)
-                {
-                    ShowLaunchError(dialog.FileName, "실행 경로를 저장하지 못했습니다.\n" + exception.Message);
-                    return null;
-                }
+                var extensionFolder = Path.GetDirectoryName(typeof(ClassroomLivePackage).Assembly.Location);
+                var path = Path.Combine(extensionFolder ?? "", "Host", "ClassroomLive.exe");
+                return File.Exists(path) ? path : null;
             }
+            catch { return null; }
         }
 
         private void ShowLaunchError(string path, string reason)
@@ -777,60 +755,6 @@ namespace ClassroomLive.Extension
                 }
             }
 
-            /// <summary>"실행"이 켤 실행 파일. 없거나 잘못됐으면 선택창을 다시 띄운다.</summary>
-            public static string InstalledExecutable()
-            {
-                try
-                {
-                    var path = Path.Combine(Folder, "install.json");
-                    if (!File.Exists(path)) return null;
-                    using (var stream = File.OpenRead(path))
-                    {
-                        var serializer = new DataContractJsonSerializer(typeof(InstallInfo));
-                        var info = serializer.ReadObject(stream) as InstallInfo;
-                        if (info == null || !IsClassroomLiveExecutable(info.Executable))
-                        {
-                            TryDelete(path);
-                            return null;
-                        }
-                        return Path.GetFullPath(info.Executable);
-                    }
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-
-            public static bool IsClassroomLiveExecutable(string path)
-            {
-                try
-                {
-                    return !string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
-                           string.Equals(Path.GetFileName(path), "ClassroomLive.exe",
-                               StringComparison.OrdinalIgnoreCase);
-                }
-                catch
-                {
-                    return false;
-                }
-            }
-
-            public static void RememberExecutable(string executable)
-            {
-                if (!IsClassroomLiveExecutable(executable))
-                    throw new ArgumentException("ClassroomLive.exe 경로가 아닙니다.", nameof(executable));
-
-                Directory.CreateDirectory(Folder);
-                var path = Path.Combine(Folder, "install.json");
-                var info = new InstallInfo { Executable = Path.GetFullPath(executable) };
-                using (var stream = File.Create(path))
-                {
-                    var serializer = new DataContractJsonSerializer(typeof(InstallInfo));
-                    serializer.WriteObject(stream, info);
-                }
-            }
-
             private static HostHandshake ReadHandshake()
             {
                 var path = Path.Combine(Folder, "host.json");
@@ -874,12 +798,6 @@ namespace ClassroomLive.Extension
                 try { File.Delete(path); }
                 catch { }
             }
-        }
-
-        [DataContract]
-        private sealed class InstallInfo
-        {
-            [DataMember(Name = "exe")] public string Executable { get; set; }
         }
 
         [DataContract]

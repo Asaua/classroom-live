@@ -296,14 +296,6 @@ app.MapPost("/api/extension/shutdown", (HttpContext context, ClassroomSession se
     return Results.Ok();
 });
 
-// 확장이 "실행"으로 호스트를 켜려면 실행 파일 위치를 알아야 한다.
-// 핸드셰이크 파일과 달리 종료해도 남겨둔다.
-try
-{
-    if (FindHostExecutable() is { } exePath) HostHandshake.RememberInstall(exePath);
-}
-catch { /* 위치를 못 남겨도 수업 진행에는 지장이 없다. */ }
-
 app.Lifetime.ApplicationStarted.Register(() =>
 {
     var session = app.Services.GetRequiredService<ClassroomSession>();
@@ -391,18 +383,6 @@ finally
 }
 
 return 0;
-
-static string? FindHostExecutable()
-{
-    // framework-dependent 실행을 `dotnet ClassroomLive.dll`로 시작하면 ProcessPath는
-    // dotnet.exe다. 그 값을 저장하면 Visual Studio의 실행 버튼이 아무 인자 없는
-    // dotnet.exe를 켜게 되므로 실제 apphost만 기억한다.
-    if (HostHandshake.IsClassroomLiveExecutable(Environment.ProcessPath))
-        return Path.GetFullPath(Environment.ProcessPath!);
-
-    var appHost = Path.Combine(AppContext.BaseDirectory, "ClassroomLive.exe");
-    return HostHandshake.IsClassroomLiveExecutable(appHost) ? Path.GetFullPath(appHost) : null;
-}
 
 static string[] GetStudentUrls(int port, string pin)
 {

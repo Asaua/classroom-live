@@ -10,8 +10,8 @@
 
 - Windows 10/11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
 - macOS, Linux, Windows ARM64, Visual Studio Code는 지원하지 않습니다.
-- 현재 배포용 호스트는 framework-dependent 빌드이므로 교수 PC에 .NET 10 SDK 또는
-  ASP.NET Core Runtime 10이 설치되어 있어야 합니다.
+- 배포용 VSIX에 Windows x64용 호스트 런타임이 포함되므로 교수 PC에 .NET을 따로
+  설치할 필요가 없습니다.
 
 ## 구성
 
@@ -35,10 +35,8 @@ Visual Studio ──(확장)──▶ 127.0.0.1:5050 ──▶ ClassroomLive.exe
 돌려보냅니다. 덕분에 교수 화면 버튼만으로도 공유를 켜고 끌 수 있고, Visual Studio
 메뉴도 별도 조회 없이 글자와 활성 여부를 정할 수 있습니다.
 
-실행 파일 위치는 `%LOCALAPPDATA%\ClassroomLive\install.json`에 남습니다.
-Visual Studio의 "실행"이 이 값을 씁니다. 저장된 경로가 없거나 잘못됐으면
-`ClassroomLive.exe` 선택창이 열리고, 고른 즉시 저장한 뒤 실행합니다. 호스트를 직접
-실행한 경우에도 자신의 올바른 실행 경로를 기록합니다.
+Visual Studio의 "실행"은 VSIX에 포함된 `Host\ClassroomLive.exe`를 바로 실행합니다.
+별도 ZIP 압축 해제, 실행 파일 선택, .NET 런타임 설치가 필요하지 않습니다.
 
 확장과 호스트는 `%LOCALAPPDATA%\ClassroomLive\host.json`으로 포트와 토큰을 주고받습니다.
 호스트가 실행 중이어야 이 파일이 생기며, 종료하면 지워집니다. 비정상 종료로 파일이
@@ -46,25 +44,22 @@ Visual Studio의 "실행"이 이 값을 씁니다. 저장된 경로가 없거나
 
 ## 빌드
 
-호스트와 확장은 빌드 방법이 다릅니다.
-
-**호스트** — .NET 10 SDK만 있으면 됩니다.
-
-```bash
-dotnet publish host/ClassroomLive.Host -c Release -o dist
-```
-
-`dotnet build`로도 실행 가능한 산출물이 나오지만, 배포용으로는 `publish`를 쓰세요.
-`wwwroot`가 빠지면 화면이 뜨지 않으며, 이 경우 실행 시 명확한 오류 메시지가 나옵니다.
-
-**확장(VSIX)** — Visual Studio와 "Visual Studio 확장 개발" 워크로드가 필요합니다.
-`dotnet build`로는 빌드되지 않습니다.
+배포용 VSIX는 Visual Studio와 "Visual Studio 확장 개발" 워크로드가 필요합니다.
+`dotnet build`로는 확장이 빌드되지 않습니다.
 
 ```powershell
 msbuild extension\ClassroomLive.Extension\ClassroomLive.Extension.csproj /p:Configuration=Release
 ```
 
 산출물: `extension\ClassroomLive.Extension\bin\Release\ClassroomLive.Extension.vsix`
+이 명령이 호스트를 Windows x64 self-contained로 게시해 VSIX의 `Host/`에 자동으로
+포함합니다. 교수에게는 이 VSIX 파일 하나만 전달하면 됩니다.
+
+호스트만 개발·테스트할 때는 .NET 10 SDK로 따로 실행할 수 있습니다.
+
+```bash
+dotnet run --project host/ClassroomLive.Host
+```
 
 `ClassroomLive.slnx`에는 호스트만 들어 있습니다. 확장을 넣으면 솔루션 단위
 `dotnet build`가 실패하기 때문입니다.
@@ -72,7 +67,7 @@ msbuild extension\ClassroomLive.Extension\ClassroomLive.Extension.csproj /p:Conf
 ## 실행
 
 교수용 사용법은 [`host/ClassroomLive.Host/README.txt`](host/ClassroomLive.Host/README.txt)에
-정리돼 있습니다. 이 파일은 배포 폴더에 함께 복사됩니다.
+정리돼 있습니다. 이 파일은 내장 호스트 폴더에도 함께 들어갑니다.
 
 호스트는 `WinExe`로 빌드됩니다. 더블클릭하면 검은 콘솔 창 없이 브라우저에 교수 화면만
 열립니다. 창을 없앤 대신 콘솔이 하던 세 가지 일을 각각 옮겼습니다.

@@ -544,33 +544,6 @@ static class HostHandshake
         catch { /* 종료 중 실패는 무시한다. */ }
     }
 
-    /// <summary>확장의 "실행"이 쓸 실행 파일 위치. 종료해도 남겨둔다.</summary>
-    public static string InstallPath { get; } = Path.Combine(
-        Path.GetDirectoryName(FilePath)!, "install.json");
-
-    public static void RememberInstall(string executablePath)
-    {
-        if (!IsClassroomLiveExecutable(executablePath))
-            throw new ArgumentException("ClassroomLive.exe 경로가 아닙니다.", nameof(executablePath));
-
-        Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
-        File.WriteAllText(InstallPath,
-            $"{{\"exe\":{System.Text.Json.JsonSerializer.Serialize(Path.GetFullPath(executablePath))}}}");
-    }
-
-    public static bool IsClassroomLiveExecutable(string? path)
-    {
-        try
-        {
-            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
-                   string.Equals(Path.GetFileName(path), "ClassroomLive.exe",
-                       StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
 }
 
 /// <summary>확장 폴링 응답. 필드 이름은 그대로 JSON 키가 된다.</summary>
