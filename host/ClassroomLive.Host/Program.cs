@@ -470,4 +470,8 @@ record ExtensionUpdateRequest(
     /// <summary>민감 내용 경고를 교수가 이번 수업에서 승인했는지.</summary>
     bool AllowSensitive = false,
     /// <summary>Visual Studio 창마다 다른 값. 창을 여러 개 열었을 때 누가 보낸 것인지 구분한다.</summary>
-    string? InstanceId = null);
+    string? InstanceId = null,
+    /// <summary>선택을 시작한 줄. 선택이 없거나 확장이 모르면 0.</summary>
+    int AnchorLine = 0,
+    /// <summary>이 Visual Studio 프로세스가 현재 전경 창인지.</summary>
+    bool Focused = false);

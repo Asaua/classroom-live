@@ -203,7 +203,8 @@ button, input { font: inherit }
 .code-lines.is-wrapped .code-line { grid-template-columns: var(--gutter) minmax(0, 1fr) }
 .code-lines.is-wrapped .lc { white-space: pre-wrap; overflow-wrap: anywhere }
 
-.code-line.is-professor-line { background: rgba(184, 245, 65, .07) }
+.code-line.is-professor-selection { background: rgba(184, 245, 65, .04) }
+.code-line.is-professor-line { background: rgba(184, 245, 65, .09) }
 .code-line.is-professor-line .ln { background: rgba(184, 245, 65, .14); color: var(--accent); font-weight: 700 }
 
 .t-comment { color: #8b98a8; font-style: italic }

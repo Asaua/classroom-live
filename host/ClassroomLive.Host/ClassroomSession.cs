@@ -21,6 +21,7 @@ sealed class ClassroomSession
     private string? _professorActiveId;
     private string? _professorActiveName;
     private int? _professorActiveLine;
+    private int? _professorAnchorLine;
     private string? _currentFileName;
     private string? _currentFileDisplayPath;
     private string? _currentFileId;
@@ -131,7 +132,7 @@ sealed class ClassroomSession
             // 그래야 다른 창으로 옮겨가서 공유를 눌렀을 때 바로 먹는다.
             var instance = string.IsNullOrWhiteSpace(request.InstanceId) ? "unknown" : request.InstanceId!;
             var userAction = action is "share" or "unshare" or "hide" or "unhide";
-            if (_ownerInstance is null || userAction ||
+            if (_ownerInstance is null || userAction || request.Focused ||
                 DateTimeOffset.UtcNow - _ownerSeenAt > OwnerTimeout)
             {
                 _ownerInstance = instance;
@@ -151,6 +152,7 @@ sealed class ClassroomSession
                 ? SecurityRules.ContentWarning(request.Content)
                 : null;
             int? activeLine = request.ActiveLine > 0 ? request.ActiveLine : null;
+            int? anchorLine = request.AnchorLine > 0 ? request.AnchorLine : activeLine;
 
             // 교수 화면 버튼과 Visual Studio 메뉴가 쓸 정보. 멈춤 중에도 최신으로 둔다.
             // 공유할 수 없는 파일도 이름은 남긴다. 그래야 왜 안 되는지 안내할 수 있다.
@@ -190,7 +192,8 @@ sealed class ClassroomSession
                 return ExtensionUpdateOutcome.Accepted;
             }
 
-            if (!_broadcasting)
+            var shareWhilePaused = _everStarted && action == "share";
+            if (!_broadcasting && !shareWhilePaused)
             {
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
@@ -207,6 +210,7 @@ sealed class ClassroomSession
                 _professorActiveName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
                 _professorActiveId = activeId is not null && _files.ContainsKey(activeId) ? activeId : null;
                 _professorActiveLine = _professorActiveId is null ? null : activeLine;
+                _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
                 _visualStudioStatus = _professorActiveName is null
                     ? "코드 파일을 선택해 주세요"
                     : $"{_professorActiveName} · 공유 안 함";
@@ -242,10 +246,16 @@ sealed class ClassroomSession
             }
 
             UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
-            _professorActiveName = Path.GetFileName(request.FilePath);
-            _professorActiveId = _files.ContainsKey(activeId!) ? activeId : null;
-            _professorActiveLine = _professorActiveId is null ? null : activeLine;
-            _visualStudioStatus = $"{_professorActiveName} · 공유 중";
+            if (_broadcasting)
+            {
+                _professorActiveName = Path.GetFileName(request.FilePath);
+                _professorActiveId = _files.ContainsKey(activeId!) ? activeId : null;
+                _professorActiveLine = _professorActiveId is null ? null : activeLine;
+                _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
+            }
+            _visualStudioStatus = _broadcasting
+                ? $"{Path.GetFileName(request.FilePath)} · 공유 중"
+                : $"{Path.GetFileName(request.FilePath)} · 추가됨 · 일시정지";
             return ExtensionUpdateOutcome.Accepted;
         }
     }
@@ -255,11 +265,12 @@ sealed class ClassroomSession
         _professorActiveId = null;
         _professorActiveName = null;
         _professorActiveLine = null;
+        _professorAnchorLine = null;
     }
 
     private void UpdateSharedFile(string fullPath, string content, string solutionRoot)
     {
-        if (!_broadcasting || !SecurityRules.IsShareable(fullPath, solutionRoot, content)) return;
+        if (!SecurityRules.IsShareable(fullPath, solutionRoot, content)) return;
 
         var normalizedPath = Path.GetFullPath(fullPath);
         var id = FileId(normalizedPath);
@@ -473,6 +484,7 @@ sealed class ClassroomSession
             activeIsVisible ? _professorActiveId : null,
             activeIsVisible ? _professorActiveName : null,
             activeIsVisible ? _professorActiveLine : null,
+            activeIsVisible ? _professorAnchorLine : null,
             professorAway,
             _viewers.Count,
             _broadcasting,
@@ -599,6 +611,7 @@ sealed record ClassroomSnapshot(
     string? ProfessorActiveId,
     string? ProfessorActiveName,
     int? ProfessorActiveLine,
+    int? ProfessorAnchorLine,
     bool ProfessorAway,
     int Viewers,
     bool Broadcasting,
@@ -864,6 +877,8 @@ static class SecurityRules
             "방송 전 상태를 일시정지라고 표시하지 않는다");
         Assert(waitingHost.CurrentFileDisplayPath == "Solution/Scripts/Player.cs",
             "현재 파일을 솔루션 기준 경로로 표시한다");
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1));
+        Assert(session.GetSnapshot().Files.Length == 0, "시작 전에는 파일을 공유하지 않는다");
 
         var privateSession = new ClassroomSession();
         privateSession.SetBroadcasting(true);
@@ -877,11 +892,13 @@ static class SecurityRules
             "공유하지 않은 활성 파일도 교수 화면에는 표시한다");
 
         session.SetBroadcasting(true);
-        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 3));
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+            "share", file, root, "class Player {}", 3, AnchorLine: 1));
 
         var live = session.GetSnapshot();
         Assert(live.Files.Length == 1, "실시간일 때 학생이 파일을 본다");
         Assert(live.ProfessorActiveLine == 3, "교수가 보는 줄이 전달된다");
+        Assert(live.ProfessorAnchorLine == 1, "교수가 선택을 시작한 줄도 전달된다");
 
         // 멈춤: 마지막 상태는 남고 갱신만 멈춘다.
         session.SetBroadcasting(false);
@@ -893,9 +910,22 @@ static class SecurityRules
         Assert(session.GetHostSnapshot([]).VisualStudioStatus.StartsWith("일시정지"),
             "한 번 시작한 뒤 멈추면 일시정지로 표시한다");
 
+        // 멈춘 동안 새 파일만 추가할 수 있다. 기존 파일의 밀린 수정까지 딸려가면 안 된다.
+        var pausedFile = Path.Combine(root, "Scripts", "PausedNote.cs");
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+            "share", pausedFile, root, "한 줄", 1));
+        var pausedWithNewFile = session.GetSnapshot();
+        Assert(pausedWithNewFile.Files.Length == 2, "일시정지 중에도 새 파일은 추가된다");
+        Assert(pausedWithNewFile.Files.Single(item => item.Name == "Player.cs").Content == "class Player {}",
+            "새 파일 추가가 기존 파일의 멈춘 수정을 함께 보내지 않는다");
+        Assert(pausedWithNewFile.ProfessorActiveName == "Player.cs" &&
+               pausedWithNewFile.ProfessorActiveLine == 3,
+            "일시정지 중 새 파일을 추가해도 교수 포인터는 움직이지 않는다");
+
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));
-        Assert(session.GetSnapshot().Files[0].Content.Contains("Update"), "재개하면 다시 갱신된다");
+        Assert(session.GetSnapshot().Files.Single(item => item.Name == "Player.cs").Content.Contains("Update"),
+            "재개하면 다시 갱신된다");
         Assert(session.GetSnapshot().ProfessorActiveLine == 7, "재개하면 교수 위치도 따라온다");
 
         var endedSession = new ClassroomSession();
@@ -907,26 +937,28 @@ static class SecurityRules
         Assert(!ended.Broadcasting, "끝난 세션은 다시 방송되지 않는다");
 
         // 교수가 ×로 내리면 확장에 409로 알려서 단축키 한 번에 다시 공유되게 한다.
-        var fileId = session.GetSnapshot().Files[0].Id;
+        var fileId = session.GetSnapshot().Files.Single(item => item.Name == "Player.cs").Id;
 
         // 숨김: 학생 화면에서만 빠지고 교수 목록에는 남아 되돌릴 수 있다.
         Assert(session.SetHidden(fileId, true), "숨김 처리 성공");
-        Assert(session.GetSnapshot().Files.Length == 0, "숨기면 학생에게 안 보인다");
-        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 1, "숨겨도 교수 목록에는 남는다");
-        Assert(session.GetHostSnapshot([]).Classroom.Files[0].Hidden, "숨김 표시가 붙는다");
+        Assert(session.GetSnapshot().Files.All(item => item.Id != fileId), "숨기면 학생에게 안 보인다");
+        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 2, "숨겨도 교수 목록에는 남는다");
+        Assert(session.GetHostSnapshot([]).Classroom.Files.Single(item => item.Id == fileId).Hidden,
+            "숨김 표시가 붙는다");
         Assert(session.SetHidden(fileId, false), "숨김 해제 성공");
-        Assert(session.GetSnapshot().Files.Length == 1, "숨김을 풀면 다시 보인다");
+        Assert(session.GetSnapshot().Files.Length == 2, "숨김을 풀면 다시 보인다");
         Assert(!session.SetHidden("없는id", true), "없는 파일은 숨길 수 없다");
 
         // 확장에서 숨기고 푸는 경로도 같아야 한다.
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest("hide", file, root, null, 0));
-        Assert(session.GetSnapshot().Files.Length == 0, "확장에서 숨겨도 학생에게 안 보인다");
+        Assert(session.GetSnapshot().Files.All(item => item.Id != fileId), "확장에서 숨겨도 학생에게 안 보인다");
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest("unhide", file, root, null, 0));
-        Assert(session.GetSnapshot().Files.Length == 1, "확장에서 숨김을 풀 수 있다");
+        Assert(session.GetSnapshot().Files.Length == 2, "확장에서 숨김을 풀 수 있다");
 
         // 공유 해제는 목록에서 완전히 뺀다. 확장이 계속 동기화해도 되살아나면 안 된다.
         session.Unshare(fileId);
-        Assert(session.GetHostSnapshot([]).Classroom.Files.Length == 0, "공유를 해제하면 교수 목록에서도 빠진다");
+        Assert(session.GetHostSnapshot([]).Classroom.Files.All(item => item.Id != fileId),
+            "공유를 해제하면 교수 목록에서도 빠진다");
         Assert(session.ApplyExtensionUpdate(Sync("class Player {}", 1)) == ExtensionUpdateOutcome.Unshared,
             "해제된 파일은 확장에 409로 알린다");
         Assert(session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1))
@@ -953,8 +985,8 @@ static class SecurityRules
         multi.SetBroadcasting(true);
         var fileA = Path.Combine(root, "A.cs");
         var fileB = Path.Combine(root, "B.cs");
-        ExtensionUpdateRequest From(string window, string action, string path, string content) =>
-            new(action, path, root, content, 1, false, window);
+        ExtensionUpdateRequest From(string window, string action, string path, string content,
+            bool focused = false) => new(action, path, root, content, 1, false, window, 0, focused);
 
         // 첫 창이 공유하면 그 창이 주인이 된다.
         multi.ApplyExtensionUpdate(From("win-1", "share", fileA, "class A {}"));
@@ -979,11 +1011,17 @@ static class SecurityRules
         Assert(!multi.BuildReply("win-1").Owner, "이전 주인은 주인이 아니게 된다");
         Assert(multi.GetSnapshot().ProfessorActiveName == "B.cs", "넘겨받은 창이 화면을 몬다");
 
+        // 메뉴를 누르지 않아도 실제로 포커스된 Visual Studio가 주인이 된다.
+        multi.ApplyExtensionUpdate(From("win-1", "heartbeat", fileA, null!, focused: true));
+        Assert(multi.BuildReply("win-1").Owner, "포커스된 창이 주인을 넘겨받는다");
+        multi.ApplyExtensionUpdate(From("win-2", "heartbeat", fileB, null!));
+        Assert(multi.BuildReply("win-1").Owner, "백그라운드 창의 폴링은 주인을 빼앗지 않는다");
+
         // 교수 화면의 현재 파일 명령은 주인 창만 가져가야 한다.
         multi.RequestShare(true);
-        Assert(multi.BuildReply("win-1", fileA, root).Command is null,
+        Assert(multi.BuildReply("win-2", fileB, root).Command is null,
             "비주인 창은 교수 화면 명령을 가져가지 않는다");
-        Assert(multi.BuildReply("win-2", fileB, root).Command == "share",
+        Assert(multi.BuildReply("win-1", fileA, root).Command == "share",
             "교수 화면 명령은 주인 창에 전달된다");
 
         // 주인 창의 차단 상태가 다른 창의 정상 파일에 묻어나면 공유 버튼이 막힌다.

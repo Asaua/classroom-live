@@ -1,4 +1,5 @@
 using Microsoft.VisualStudio.Shell;
+using EnvDTE;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Design;
@@ -57,9 +58,16 @@ namespace ClassroomLive.Extension
         // Visual Studio 창마다 다른 값. 여러 개를 열었을 때 호스트가 누가 보낸 것인지
         // 구분하지 못하면 창들이 서로 활성 파일을 덮어써서 화면이 깜빡인다.
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
+        private static readonly uint CurrentProcessId = (uint)Process.GetCurrentProcess().Id;
         private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         private readonly HashSet<string> sharedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> hiddenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private dynamic dte;
+        private WindowEvents windowEvents;
+        private OleMenuCommand hostCommand;
+        private OleMenuCommand pauseCommand;
+        private OleMenuCommand shareCommand;
+        private OleMenuCommand hideCommand;
         private Timer syncTimer;
         private int syncRunning;
         private int intervalMs = ActiveIntervalMs;
@@ -70,10 +78,6 @@ namespace ClassroomLive.Extension
         private bool broadcasting;
         private bool everStarted;
         private bool isOwner = true;
-        private bool currentShareable;
-        private string currentBlockReason;
-        private bool currentShared;
-        private bool currentHidden;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -85,25 +89,32 @@ namespace ClassroomLive.Extension
             var commands = await GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
             if (commands != null)
             {
-                Add(commands, StartCommandId, ToggleHost, QueryHost);
-                Add(commands, TogglePauseCommandId, TogglePause, QueryPause);
-                Add(commands, ToggleShareCommandId, ToggleShare, QueryShare);
-                Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
+                hostCommand = Add(commands, StartCommandId, ToggleHost, QueryHost);
+                pauseCommand = Add(commands, TogglePauseCommandId, TogglePause, QueryPause);
+                shareCommand = Add(commands, ToggleShareCommandId, ToggleShare, QueryShare);
+                hideCommand = Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
             }
 
+            windowEvents = ((DTE)dte).Events.WindowEvents;
+            windowEvents.WindowActivated += OnWindowActivated;
             syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
 
-        private void Add(OleMenuCommandService commands, int id, EventHandler invoke, EventHandler query)
+        private OleMenuCommand Add(OleMenuCommandService commands, int id, EventHandler invoke, EventHandler query)
         {
             var command = new OleMenuCommand(invoke, new CommandID(CommandSet, id));
             command.BeforeQueryStatus += query;
             commands.AddCommand(command);
+            return command;
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) syncTimer?.Dispose();
+            if (disposing)
+            {
+                syncTimer?.Dispose();
+                if (windowEvents != null) windowEvents.WindowActivated -= OnWindowActivated;
+            }
             base.Dispose(disposing);
         }
 
@@ -129,17 +140,35 @@ namespace ClassroomLive.Extension
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
-            command.Enabled = hostReachable && !string.IsNullOrWhiteSpace(ActiveFilePath());
-            command.Text = currentShared ? "공유 해제" : "공유";
+            var path = ActiveFilePath();
+            command.Enabled = hostReachable && !string.IsNullOrWhiteSpace(path);
+            command.Text = path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
         }
 
         private void QueryHide(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
+            var path = ActiveFilePath();
             // 공유 목록에 없는 파일은 숨길 것도 없다.
-            command.Enabled = hostReachable && currentShared;
-            command.Text = currentHidden ? "다시 보이기" : "숨김";
+            command.Enabled = hostReachable && path != null && sharedFiles.Contains(path);
+            command.Text = path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
+        }
+
+        private void OnWindowActivated(Window gotFocus, Window lostFocus)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            RefreshCommands();
+            SyncActiveFile(null);
+        }
+
+        private void RefreshCommands()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (hostCommand != null) QueryHost(hostCommand, EventArgs.Empty);
+            if (pauseCommand != null) QueryPause(pauseCommand, EventArgs.Empty);
+            if (shareCommand != null) QueryShare(shareCommand, EventArgs.Empty);
+            if (hideCommand != null) QueryHide(hideCommand, EventArgs.Empty);
         }
 
         // --- 명령 ------------------------------------------------------------
@@ -155,6 +184,7 @@ namespace ClassroomLive.Extension
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
                     if (ok) hostReachable = false;
                     SetStatus(ok ? "Classroom Live · 종료했습니다" : "Classroom Live · 종료하지 못했습니다");
+                    RefreshCommands();
                 });
                 return;
             }
@@ -259,9 +289,13 @@ namespace ClassroomLive.Extension
                     SetStatus("Classroom Live · 호스트에 연결하지 못했습니다");
                     return;
                 }
+                var resuming = next && everStarted;
                 broadcasting = next;
                 if (next) everStarted = true;
-                SetStatus(next ? "Classroom Live · 시작" : "Classroom Live · 일시정지");
+                SetStatus(next
+                    ? (resuming ? "Classroom Live · 재개" : "Classroom Live · 시작")
+                    : "Classroom Live · 일시정지");
+                RefreshCommands();
             });
         }
 
@@ -277,30 +311,27 @@ namespace ClassroomLive.Extension
                     return;
                 }
 
-                // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
-                if (!currentShared && !currentShareable)
-                {
-                    SetStatus("Classroom Live · " + (currentBlockReason ?? "공유할 수 없는 파일입니다"));
-                    return;
-                }
-
                 // 방금 사용자가 조작했으므로 느린 주기에서 즉시 빠져나온다.
                 SetInterval(ActiveIntervalMs);
 
-                if (sharedFiles.Remove(update.FilePath))
+                PostResult result;
+                if (sharedFiles.Contains(update.FilePath))
                 {
                     update.Action = "unshare";
                     update.Content = null;
-                    await PostAsync(update);
-                    SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유 해제");
+                    result = await PostAsync(update);
+                    ApplyReply(result, update.FilePath);
+                    SetStatus(result.Status == HttpStatusCode.OK
+                        ? "Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유 해제"
+                        : "Classroom Live · " + ReplyError(result));
                 }
                 else
                 {
                     update.Action = "share";
-                    var result = await PostWithSensitiveConfirmationAsync(update);
+                    result = await PostWithSensitiveConfirmationAsync(update);
+                    ApplyReply(result, update.FilePath);
                     if (result.Status == HttpStatusCode.OK)
                     {
-                        sharedFiles.Add(update.FilePath);
                         SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유");
                     }
                     else
@@ -319,16 +350,16 @@ namespace ClassroomLive.Extension
                 var update = CaptureActiveFile(includeContent: false);
                 if (update == null) return;
 
-                var hide = !currentHidden;
+                var hide = !hiddenFiles.Contains(update.FilePath);
                 update.Action = hide ? "hide" : "unhide";
                 var result = await PostAsync(update);
+                ApplyReply(result, update.FilePath);
                 if (result.Status != HttpStatusCode.OK)
                 {
                     SetStatus("Classroom Live · 호스트에 연결하지 못했습니다");
                     return;
                 }
 
-                currentHidden = hide;
                 SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) +
                     (hide ? " 숨김" : " 다시 보임"));
             });
@@ -346,7 +377,8 @@ namespace ClassroomLive.Extension
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
                     var update = CaptureActiveFile(includeContent: false) ?? new ExtensionUpdate
                     {
-                        Action = "heartbeat"
+                        Action = "heartbeat",
+                        Focused = IsVisualStudioForeground()
                     };
                     var path = update.FilePath;
                     // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
@@ -366,14 +398,7 @@ namespace ClassroomLive.Extension
                             SetStatus("Classroom Live · " + ReplyError(result));
                     }
 
-                    ApplyReply(result);
-                    // 호스트 응답은 이 창이 보낸 파일 기준이다. 다른 창에서 먼저 공유한
-                    // 파일도 알아야 주인이 넘어왔을 때 곧바로 내용 동기화를 시작한다.
-                    if (result.Status == HttpStatusCode.OK && result.Reply != null && path != null)
-                    {
-                        if (result.Reply.Shared) sharedFiles.Add(path);
-                        else sharedFiles.Remove(path);
-                    }
+                    ApplyReply(result, path);
                     UpdateInterval(result.ReachedHost);
 
                     // 교수 화면 버튼으로 내린 명령. Visual Studio로 돌아오지 않아도 동작한다.
@@ -388,19 +413,34 @@ namespace ClassroomLive.Extension
             });
         }
 
-        private void ApplyReply(PostResult result)
+        private void ApplyReply(PostResult result, string path = null)
         {
+            var oldReachable = hostReachable;
+            var oldBroadcasting = broadcasting;
+            var oldEverStarted = everStarted;
             hostReachable = result.ReachedHost;
-            if (result.Reply == null) return;
+            if (result.Reply == null)
+            {
+                if (oldReachable != hostReachable) RefreshCommands();
+                return;
+            }
 
             isOwner = result.Reply.Owner;
             broadcasting = result.Reply.Broadcasting;
             everStarted = result.Reply.EverStarted;
-            currentShareable = result.Reply.Shareable;
-            currentBlockReason = result.Reply.BlockReason;
-            currentShared = result.Reply.Shared;
-            currentHidden = result.Reply.Hidden;
+            var fileStateChanged = false;
+            if (path != null)
+            {
+                fileStateChanged = SetMembership(sharedFiles, path, result.Reply.Shared) |
+                                   SetMembership(hiddenFiles, path, result.Reply.Hidden);
+            }
+            if (fileStateChanged || oldReachable != hostReachable ||
+                oldBroadcasting != broadcasting || oldEverStarted != everStarted)
+                RefreshCommands();
         }
+
+        private static bool SetMembership(HashSet<string> files, string path, bool contains) =>
+            contains ? files.Add(path) : files.Remove(path);
 
         /// <summary>교수 화면 버튼이 보낸 공유/해제 명령을 메뉴와 똑같이 처리한다.</summary>
         private async Task RunHostCommandAsync(string command, string path)
@@ -413,9 +453,9 @@ namespace ClassroomLive.Extension
                 if (update == null) return;
                 update.Action = "share";
                 var result = await PostWithSensitiveConfirmationAsync(update);
+                ApplyReply(result, path);
                 if (result.Status == HttpStatusCode.OK)
                 {
-                    sharedFiles.Add(update.FilePath);
                     SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유");
                 }
                 else
@@ -423,13 +463,14 @@ namespace ClassroomLive.Extension
                     SetStatus("Classroom Live · " + ReplyError(result));
                 }
             }
-            else if (command == "unshare" && sharedFiles.Remove(path))
+            else if (command == "unshare" && sharedFiles.Contains(path))
             {
                 var update = CaptureActiveFile(includeContent: false);
                 if (update == null) return;
                 update.Action = "unshare";
                 update.Content = null;
-                await PostAsync(update);
+                var result = await PostAsync(update);
+                ApplyReply(result, path);
                 SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유 해제");
             }
         }
@@ -468,7 +509,8 @@ namespace ClassroomLive.Extension
                 var update = new ExtensionUpdate
                 {
                     FilePath = document.FullName,
-                    SolutionRoot = Path.GetDirectoryName(solutionFile)
+                    SolutionRoot = Path.GetDirectoryName(solutionFile),
+                    Focused = IsVisualStudioForeground()
                 };
                 if (includeContent)
                 {
@@ -476,9 +518,18 @@ namespace ClassroomLive.Extension
                     if (textDocument == null) return null;
                     var editPoint = textDocument.StartPoint.CreateEditPoint();
                     update.Content = editPoint.GetText(textDocument.EndPoint);
-                    // 학생이 "따라가기"로 같은 줄을 볼 수 있게 커서 위치를 함께 보낸다.
-                    try { update.ActiveLine = (int)textDocument.Selection.ActivePoint.Line; }
-                    catch { update.ActiveLine = 0; }
+                    // ActivePoint는 드래그를 끝낸 쪽, AnchorPoint는 시작한 쪽이다.
+                    // 둘 다 보내면 위에서 아래로든 아래에서 위로든 같은 범위를 표시할 수 있다.
+                    try
+                    {
+                        update.ActiveLine = (int)textDocument.Selection.ActivePoint.Line;
+                        update.AnchorLine = (int)textDocument.Selection.AnchorPoint.Line;
+                    }
+                    catch
+                    {
+                        update.ActiveLine = 0;
+                        update.AnchorLine = 0;
+                    }
                 }
                 return update;
             }
@@ -493,6 +544,15 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             try { return dte?.ActiveDocument?.FullName; }
             catch { return null; }
+        }
+
+        private static bool IsVisualStudioForeground()
+        {
+            var foreground = GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return false;
+            uint processId;
+            GetWindowThreadProcessId(foreground, out processId);
+            return processId == CurrentProcessId;
         }
 
         private void SetStatus(string message)
@@ -830,9 +890,17 @@ namespace ClassroomLive.Extension
             [DataMember] public string SolutionRoot { get; set; }
             [DataMember] public string Content { get; set; }
             [DataMember] public int ActiveLine { get; set; }
+            [DataMember] public int AnchorLine { get; set; }
             [DataMember] public string InstanceId { get; set; }
             [DataMember] public bool AllowSensitive { get; set; }
+            [DataMember] public bool Focused { get; set; }
         }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int MessageBoxW(IntPtr owner, string text, string caption, uint type);

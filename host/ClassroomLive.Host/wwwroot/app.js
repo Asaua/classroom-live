@@ -18,6 +18,7 @@
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
   let selectedName = "";
   let latestHostState = null;
+  let latestClassroom = null;
   let requestRunning = false;
   let blockedUntil = 0;
   let shuttingDown = false;
@@ -100,7 +101,7 @@
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
     if (button.dataset.shared === "1") return;
-    if (latestHostState?.broadcasting !== true) return notify("먼저 수업을 시작해 주세요");
+    if (latestHostState?.everStarted !== true) return notify("먼저 수업을 시작해 주세요");
     // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
     if (button.dataset.shareable !== "1")
       return notify(button.dataset.reason || "공유할 수 없는 파일이에요");
@@ -363,6 +364,7 @@
       const payload = await response.json();
       latestHostState = isHost ? payload : null;
       const classroom = isHost ? payload.classroom : payload;
+      latestClassroom = classroom;
       $("gate").hidden = true;
       render(classroom, payload);
     } catch {
@@ -374,12 +376,15 @@
   }
 
   function render(classroom, payload) {
-    if (classroom.ended) {
+    const ended = Boolean(classroom.ended);
+    if (ended) {
       shuttingDown = true;
       setSessionState("세션 종료됨", "종료됨", "ended");
       setText($("syncStatus"), "종료됨");
-      if (isHost) showEndedScene();
-      return;
+      if (isHost) {
+        showEndedScene();
+        return;
+      }
     }
 
     const files = Array.isArray(classroom.files) ? classroom.files : [];
@@ -402,8 +407,9 @@
 
     const live = classroom.broadcasting;
     const started = Boolean(classroom.everStarted);
-    setSessionState(live ? "수업 중" : started ? "수업 일시정지" : "수업 시작 전",
-      live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : started ? "paused" : "waiting");
+    if (!ended)
+      setSessionState(live ? "수업 중" : started ? "수업 일시정지" : "수업 시작 전",
+        live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : started ? "paused" : "waiting");
     setText($("viewerCount"), String(classroom.viewers));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
@@ -414,7 +420,7 @@
     setTitle($("professorFile"), professor?.path || professorName);
 
     // 아직 한 번도 시작하지 않은 상태를 일시정지라고 부르면 거짓말이 된다.
-    setText($("syncStatus"), live ? "실시간" : !started ? "시작 전" : "일시정지");
+    setText($("syncStatus"), ended ? "종료됨" : live ? "실시간" : !started ? "시작 전" : "일시정지");
 
     if (selected) {
       setText($("fileName"), selected.name);
@@ -450,11 +456,18 @@
   // 교수가 보고 있는 줄을 표시하고, 따라가기가 켜져 있으면 그 줄로 스크롤한다.
   function applyProfessorLine(classroom, selected) {
     const line = Number(classroom.professorActiveLine) || 0;
+    const anchor = Number(classroom.professorAnchorLine) || line;
     const onSameFile = Boolean(selected) && selected.id === classroom.professorActiveId;
     const canFollow = onSameFile && line > 0 && line <= renderedRows.length;
 
-    for (const row of document.querySelectorAll(".code-line.is-professor-line"))
-      row.classList.remove("is-professor-line");
+    for (const row of document.querySelectorAll(".code-line.is-professor-line, .code-line.is-professor-selection"))
+      row.classList.remove("is-professor-line", "is-professor-selection");
+    if (canFollow) {
+      const first = Math.max(1, Math.min(line, anchor));
+      const last = Math.min(renderedRows.length, Math.max(line, anchor));
+      for (let selectedLine = first; selectedLine <= last; selectedLine += 1)
+        renderedRows[selectedLine - 1]?.node.classList.add("is-professor-selection");
+    }
     if (canFollow) renderedRows[line - 1]?.node.classList.add("is-professor-line");
 
     const button = $("followProfessor");
@@ -675,7 +688,8 @@ while with yield None True False
       openFiles(false);
       // 직접 골랐다는 건 안내를 이해했다는 뜻이다.
       dismissNote();
-      void refresh();
+      if (latestClassroom) render(latestClassroom, latestHostState);
+      if (!shuttingDown) void refresh();
     });
 
     const icon = document.createElement("span");
@@ -771,13 +785,13 @@ while with yield None True False
     const shared = Boolean(payload.currentFileShared);
     const shareable = Boolean(payload.currentFileShareable);
     const displayPath = payload.currentFileDisplayPath || current;
-    const canAdd = payload.broadcasting && shareable && !shared;
+    const canAdd = payload.everStarted && shareable && !shared;
     setText(label, current);
     setTitle(label, displayPath);
     setText(share, shared ? "✓" : "+");
     const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
     const action = shared ? `${current}은(는) 이미 추가되어 있습니다`
-      : !payload.broadcasting ? `${current}은(는) 수업 시작 후 추가할 수 있습니다`
+      : !payload.everStarted ? `${current}은(는) 수업 시작 후 추가할 수 있습니다`
       : shareable ? `${current}을(를) 추가합니다` : reason;
     share.setAttribute("aria-label", action);
     setTitle(share, action);
