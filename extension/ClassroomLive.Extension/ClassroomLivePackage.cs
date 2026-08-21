@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.2")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.3")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -41,7 +41,7 @@ namespace ClassroomLive.Extension
         private const int TogglePauseCommandId = 0x0103;
         private const int ToggleHideCommandId = 0x0104;
         private const string SettingsCollection = "ClassroomLive";
-        private const string ToolbarShownSetting = "ToolbarShown";
+        private const string ToolbarVisibleSetting = "ToolbarShown";
 
         // 호스트가 살아 있을 때만 빠르게 돈다. 연결이 없으면 느리게 돌려서
         // Classroom Live를 안 쓰는 날에도 UI 스레드를 계속 건드리지 않게 한다.
@@ -75,12 +75,15 @@ namespace ClassroomLive.Extension
         private int syncRunning;
         private int intervalMs = ActiveIntervalMs;
         private int failureStreak;
+        private int refreshingSharedFiles;
+        private bool? toolbarVisible;
 
         // 마지막 폴링에서 받은 호스트 상태. 메뉴 글자와 활성 여부를 여기서 정한다.
         private bool hostReachable;
         private bool broadcasting;
         private bool everStarted;
         private bool isOwner = true;
+        private bool hostStopping;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -98,7 +101,7 @@ namespace ClassroomLive.Extension
                 hideCommand = Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
             }
 
-            await ShowToolbarOnceAsync(cancellationToken);
+            SyncToolbarPreference();
 
             syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
@@ -111,22 +114,33 @@ namespace ClassroomLive.Extension
             return command;
         }
 
-        private async Task ShowToolbarOnceAsync(CancellationToken cancellationToken)
+        private void SyncToolbarPreference()
         {
-            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
                 var settings = new ShellSettingsManager(this).GetWritableSettingsStore(SettingsScope.UserSettings);
                 if (!settings.CollectionExists(SettingsCollection)) settings.CreateCollection(SettingsCollection);
-                if (settings.GetBoolean(SettingsCollection, ToolbarShownSetting, false)) return;
-
                 dynamic toolbar = dte.CommandBars["Classroom Live"];
-                toolbar.Visible = true;
-                settings.SetBoolean(SettingsCollection, ToolbarShownSetting, true);
+
+                if (!toolbarVisible.HasValue)
+                {
+                    // 최초 설치는 표시한다. 이후 창은 사용자가 마지막으로 선택한 표시 상태를 따른다.
+                    var preferred = settings.GetBoolean(SettingsCollection, ToolbarVisibleSetting, true);
+                    toolbar.Visible = preferred;
+                    toolbarVisible = preferred;
+                    settings.SetBoolean(SettingsCollection, ToolbarVisibleSetting, preferred);
+                    return;
+                }
+
+                var visible = (bool)toolbar.Visible;
+                if (visible == toolbarVisible.Value) return;
+                toolbarVisible = visible;
+                settings.SetBoolean(SettingsCollection, ToolbarVisibleSetting, visible);
             }
             catch
             {
-                // 셸이 아직 도구 모음을 만들지 않았다면 다음 실행에서 다시 시도한다.
+                // 셸이 아직 도구 모음을 만들지 않았다면 다음 폴링에서 다시 시도한다.
             }
         }
 
@@ -145,15 +159,15 @@ namespace ClassroomLive.Extension
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
-            command.Enabled = true;
-            command.Text = hostReachable ? "종료" : "실행";
+            command.Enabled = !hostStopping;
+            command.Text = hostStopping ? "종료 중..." : hostReachable ? "종료" : "실행";
         }
 
         private void QueryPause(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
-            command.Enabled = hostReachable;
+            command.Enabled = hostReachable && !hostStopping;
             command.Text = broadcasting ? "일시정지" : everStarted ? "재개" : "시작";
         }
 
@@ -162,7 +176,7 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             var path = ActiveFilePath();
-            command.Enabled = hostReachable && everStarted && !string.IsNullOrWhiteSpace(path);
+            command.Enabled = hostReachable && !hostStopping && everStarted && !string.IsNullOrWhiteSpace(path);
             command.Text = path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
         }
 
@@ -172,7 +186,7 @@ namespace ClassroomLive.Extension
             var command = (OleMenuCommand)sender;
             var path = ActiveFilePath();
             // 공유 목록에 없는 파일은 숨길 것도 없다.
-            command.Enabled = hostReachable && path != null && sharedFiles.Contains(path);
+            command.Enabled = hostReachable && !hostStopping && path != null && sharedFiles.Contains(path);
             command.Text = path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
         }
 
@@ -190,15 +204,25 @@ namespace ClassroomLive.Extension
         private void ToggleHost(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            if (hostStopping) return;
             if (hostReachable)
             {
+                hostStopping = true;
+                SetStatus("Classroom Live · 종료 중...");
+                RefreshCommands();
                 _ = JoinableTaskFactory.RunAsync(async delegate
                 {
                     var ok = await PostControlAsync("shutdown", null);
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
-                    if (ok) hostReachable = false;
-                    SetStatus(ok ? "Classroom Live · 종료했습니다" : "Classroom Live · 종료하지 못했습니다");
-                    RefreshCommands();
+                    if (!ok)
+                    {
+                        hostStopping = false;
+                        SetStatus("Classroom Live · 종료하지 못했습니다");
+                        RefreshCommands();
+                        return;
+                    }
+
+                    await WaitForHostStopAsync();
                 });
                 return;
             }
@@ -249,6 +273,28 @@ namespace ClassroomLive.Extension
             ShowLaunchError(exe, "10초 안에 서버 응답을 받지 못했습니다.");
         }
 
+        private async Task WaitForHostStopAsync()
+        {
+            for (var attempt = 0; attempt < 60; attempt++)
+            {
+                await Task.Delay(250).ConfigureAwait(false);
+                var result = await PostAsync(new ExtensionUpdate { Action = "heartbeat" }).ConfigureAwait(false);
+                if (result.ReachedHost) continue;
+
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                hostStopping = false;
+                hostReachable = false;
+                SetStatus("Classroom Live · 종료했습니다");
+                RefreshCommands();
+                return;
+            }
+
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            hostStopping = false;
+            SetStatus("Classroom Live · 종료가 지연되고 있습니다");
+            RefreshCommands();
+        }
+
         private static string BundledHostExecutable()
         {
             try
@@ -285,6 +331,7 @@ namespace ClassroomLive.Extension
                 var resuming = next && everStarted;
                 broadcasting = next;
                 if (next) everStarted = true;
+                if (resuming) await RefreshSharedFilesAsync();
                 SetStatus(next
                     ? (resuming ? "Classroom Live · 재개" : "Classroom Live · 시작")
                     : "Classroom Live · 일시정지");
@@ -368,6 +415,7 @@ namespace ClassroomLive.Extension
                 try
                 {
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    SyncToolbarPreference();
                     var update = CaptureActiveFile(includeContent: false) ?? new ExtensionUpdate
                     {
                         Action = "heartbeat",
@@ -381,7 +429,7 @@ namespace ClassroomLive.Extension
                     }
                     // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
                     // UI 스레드를 붙잡을 이유가 없다.
-                    var isShared = isOwner && path != null && sharedFiles.Contains(path);
+                    var isShared = !hostStopping && isOwner && path != null && sharedFiles.Contains(path);
                     if (isShared) update = CaptureActiveFile(includeContent: true) ?? update;
                     update.Action = isShared ? "sync" : "heartbeat";
                     var result = await PostAsync(update);
@@ -416,16 +464,20 @@ namespace ClassroomLive.Extension
             var oldReachable = hostReachable;
             var oldBroadcasting = broadcasting;
             var oldEverStarted = everStarted;
+            var oldStopping = hostStopping;
             hostReachable = result.ReachedHost;
             if (result.Reply == null)
             {
-                if (oldReachable != hostReachable) RefreshCommands();
+                if (!hostReachable) hostStopping = false;
+                if (oldReachable != hostReachable || oldStopping != hostStopping) RefreshCommands();
                 return;
             }
 
             isOwner = result.Reply.Owner;
             broadcasting = result.Reply.Broadcasting;
             everStarted = result.Reply.EverStarted;
+            if (result.Reply.Ended) hostStopping = true;
+            var resumedFromHost = !oldBroadcasting && oldEverStarted && broadcasting && result.Reply.Owner;
             var fileStateChanged = false;
             if (path != null)
             {
@@ -433,12 +485,34 @@ namespace ClassroomLive.Extension
                                    SetMembership(hiddenFiles, path, result.Reply.Hidden);
             }
             if (fileStateChanged || oldReachable != hostReachable ||
-                oldBroadcasting != broadcasting || oldEverStarted != everStarted)
+                oldBroadcasting != broadcasting || oldEverStarted != everStarted || oldStopping != hostStopping)
                 RefreshCommands();
+            if (resumedFromHost) _ = JoinableTaskFactory.RunAsync(RefreshSharedFilesAsync);
         }
 
         private static bool SetMembership(HashSet<string> files, string path, bool contains) =>
             contains ? files.Add(path) : files.Remove(path);
+
+        private async Task RefreshSharedFilesAsync()
+        {
+            if (Interlocked.Exchange(ref refreshingSharedFiles, 1) != 0) return;
+            try
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                var updates = sharedFiles.Select(CaptureSharedFile).Where(update => update != null).ToArray();
+                foreach (var update in updates)
+                {
+                    var result = await PostAsync(update);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (result.Status == HttpStatusCode.Conflict)
+                        sharedFiles.Remove(update.FilePath);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref refreshingSharedFiles, 0);
+            }
+        }
 
         /// <summary>교수 화면 버튼이 보낸 공유/해제 명령을 메뉴와 똑같이 처리한다.</summary>
         private async Task RunHostCommandAsync(string command, string path)
@@ -530,6 +604,43 @@ namespace ClassroomLive.Extension
                     }
                 }
                 return update;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private ExtensionUpdate CaptureSharedFile(string filePath)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var solutionFile = dte?.Solution?.FullName;
+                if (string.IsNullOrWhiteSpace(solutionFile) || string.IsNullOrWhiteSpace(filePath)) return null;
+
+                string content = null;
+                foreach (Document document in dte.Documents)
+                {
+                    if (!string.Equals(document.FullName, filePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    dynamic textDocument = document.Object("TextDocument");
+                    if (textDocument == null) return null;
+                    var editPoint = textDocument.StartPoint.CreateEditPoint();
+                    content = editPoint.GetText(textDocument.EndPoint);
+                    break;
+                }
+
+                // 닫힌 문서는 VS에서 수정할 수 없으므로 다시 읽지 않는다. 디스크를 임의의
+                // UTF-8로 읽으면 CP949 같은 기존 소스 파일을 깨뜨릴 수 있다.
+                if (content == null) return null;
+                return new ExtensionUpdate
+                {
+                    Action = "refresh",
+                    FilePath = filePath,
+                    SolutionRoot = Path.GetDirectoryName(solutionFile),
+                    Content = content,
+                    Focused = IsVisualStudioForeground()
+                };
             }
             catch
             {
@@ -707,6 +818,7 @@ namespace ClassroomLive.Extension
             [DataMember(Name = "owner")] public bool Owner { get; set; }
             [DataMember(Name = "broadcasting")] public bool Broadcasting { get; set; }
             [DataMember(Name = "everStarted")] public bool EverStarted { get; set; }
+            [DataMember(Name = "ended")] public bool Ended { get; set; }
             [DataMember(Name = "shareable")] public bool Shareable { get; set; }
             [DataMember(Name = "blockReason")] public string BlockReason { get; set; }
             [DataMember(Name = "warning")] public string Warning { get; set; }

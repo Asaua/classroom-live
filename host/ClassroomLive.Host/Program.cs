@@ -135,6 +135,15 @@ app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
     return Results.Json(session.GetSnapshot());
 }).RequireRateLimiting("student-state");
 
+app.MapPost("/api/viewer/leave", (HttpContext context, ClassroomSession session) =>
+{
+    var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
+    if (!session.IsValidPin(pin)) return Results.Unauthorized();
+
+    session.RemoveViewer(context.Connection.RemoteIpAddress?.ToString());
+    return Results.Ok();
+});
+
 app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
 {
     if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
@@ -409,11 +418,11 @@ static string[] GetStudentUrls(int port, string pin)
 static void ScheduleShutdown(ClassroomSession session, IHostApplicationLifetime lifetime)
 {
     // 학생 화면이 다음 폴링에서 "종료됨"을 받은 뒤 서버를 내린다.
-    // 폴링 간격(0.75초)의 두 배면 한 번의 지연이 있어도 전달할 수 있다.
+    // VM 부하와 백그라운드 탭의 타이머 지연까지 감안해 잠시 유지한다.
     session.End();
     _ = Task.Run(async () =>
     {
-        await Task.Delay(1500);
+        await Task.Delay(5000);
         lifetime.StopApplication();
     });
 }

@@ -23,6 +23,15 @@
   let blockedUntil = 0;
   let shuttingDown = false;
 
+  const SESSION_STATES = Object.freeze({
+    connecting: { name: "수업 연결 중", connection: "연결 중", sync: "연결 중", kind: "waiting", viewers: false },
+    before: { name: "수업 시작 전", connection: "대기", sync: "시작 전", kind: "waiting", viewers: true },
+    live: { name: "수업 중", connection: "실시간", sync: "실시간", kind: "live", viewers: true },
+    paused: { name: "수업 일시정지", connection: "일시정지", sync: "일시정지", kind: "paused", viewers: true },
+    ended: { name: "세션 종료됨", connection: "종료됨", sync: "종료됨", kind: "ended", viewers: false },
+    disconnected: { name: "수업 연결 끊김", connection: "끊김", sync: "연결 끊김", kind: "waiting", viewers: false },
+  });
+
   const FONT_STEPS = [11, 12.5, 14, 16, 18, 21, 24];
   const DEFAULT_FONT_INDEX = 1;
   // Number(null)은 0이다. 그대로 넘기면 저장값이 없을 때 가장 작은 단계로 시작한다.
@@ -42,6 +51,7 @@
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
+  setSessionState("connecting");
 
   // 한 번 읽으면 끝인 안내다. 교수 화면에는 애초에 필요 없고,
   // 학생도 닫거나 파일을 직접 골라보면 다시 뜨지 않는다.
@@ -57,6 +67,15 @@
     sessionStorage.setItem("classroom-live:pin", pin);
     $("gateError").textContent = "";
     void refresh();
+  });
+
+  addEventListener("pagehide", () => {
+    if (isHost || !pin || shuttingDown) return;
+    void fetch("/api/viewer/leave", {
+      method: "POST",
+      headers: { "X-Classroom-Pin": pin },
+      keepalive: true,
+    }).catch(() => { /* 90초 만료가 대신 정리한다. */ });
   });
 
   $("mobileFiles").addEventListener("click", () => {
@@ -161,7 +180,7 @@
     try {
       await fetch("/api/host/shutdown", { method: "POST", headers: { "X-Admin-Token": adminToken } });
     } catch { /* 종료 중에 연결이 끊기는 것은 정상이다. */ }
-    setSessionState("세션 종료됨", "종료됨", "ended");
+    setSessionState("ended");
     setText($("hostStatus"), "종료됨");
     // 서버가 없으므로 이 버튼들은 이제 아무것도 하지 못한다.
     // 화면이 덮이더라도 눌리는 상태로 두지 않는다.
@@ -412,7 +431,7 @@
           sessionStorage.removeItem("classroom-live:pin");
           showGate("PIN이 맞지 않아요");
         }
-        setSessionState("수업 연결 끊김", "끊김", "waiting");
+        setSessionState("disconnected");
         return;
       }
 
@@ -423,8 +442,7 @@
       $("gate").hidden = true;
       render(classroom, payload);
     } catch {
-      setSessionState("수업 연결 끊김", "끊김", "waiting");
-      setText($("syncStatus"), "연결 끊김");
+      setSessionState("disconnected");
     } finally {
       requestRunning = false;
     }
@@ -434,8 +452,7 @@
     const ended = Boolean(classroom.ended);
     if (ended) {
       shuttingDown = true;
-      setSessionState("세션 종료됨", "종료됨", "ended");
-      setText($("syncStatus"), "종료됨");
+      setSessionState("ended");
       if (isHost) {
         showEndedScene();
         return;
@@ -463,8 +480,7 @@
     const live = classroom.broadcasting;
     const started = Boolean(classroom.everStarted);
     if (!ended)
-      setSessionState(live ? "수업 중" : started ? "수업 일시정지" : "수업 시작 전",
-        live ? "실시간" : started ? "일시정지" : "대기", live ? "live" : started ? "paused" : "waiting");
+      setSessionState(live ? "live" : started ? "paused" : "before");
     setText($("viewerCount"), String(classroom.viewers));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
@@ -473,9 +489,6 @@
       (classroom.professorAway ? "자리비움" : live ? "없음" : started ? "일시정지" : "시작 전");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
-
-    // 아직 한 번도 시작하지 않은 상태를 일시정지라고 부르면 거짓말이 된다.
-    setText($("syncStatus"), ended ? "종료됨" : live ? "실시간" : !started ? "시작 전" : "일시정지");
 
     if (selected) {
       setText($("fileName"), selected.name);
@@ -867,9 +880,12 @@ while with yield None True False
     setText(element.querySelector("b"), text);
   }
 
-  function setSessionState(name, connection, kind) {
-    setText($("className"), name);
-    setConnection(connection, kind);
+  function setSessionState(state) {
+    const view = SESSION_STATES[state];
+    setText($("className"), view.name);
+    setConnection(view.connection, view.kind);
+    setText($("syncStatus"), view.sync);
+    $("viewerCount").parentElement.hidden = !view.viewers;
   }
 
   function shortLanguage(language) {
