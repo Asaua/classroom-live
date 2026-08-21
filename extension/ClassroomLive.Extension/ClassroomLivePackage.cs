@@ -83,6 +83,7 @@ namespace ClassroomLive.Extension
         private bool broadcasting;
         private bool everStarted;
         private bool isOwner = true;
+        private bool hostStarting;
         private bool hostStopping;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
@@ -159,8 +160,8 @@ namespace ClassroomLive.Extension
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
-            command.Enabled = !hostStopping;
-            command.Text = hostStopping ? "종료 중..." : hostReachable ? "종료" : "실행";
+            command.Enabled = !hostStarting && !hostStopping;
+            command.Text = hostStarting ? "실행 중..." : hostStopping ? "종료 중..." : hostReachable ? "종료" : "실행";
         }
 
         private void QueryPause(object sender, EventArgs e)
@@ -204,7 +205,7 @@ namespace ClassroomLive.Extension
         private void ToggleHost(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (hostStopping) return;
+            if (hostStarting || hostStopping) return;
             if (hostReachable)
             {
                 hostStopping = true;
@@ -241,8 +242,10 @@ namespace ClassroomLive.Extension
                 {
                     if (process == null) throw new InvalidOperationException("프로세스를 시작하지 못했습니다.");
                 }
+                hostStarting = true;
                 SetStatus("Classroom Live · 실행 중");
                 SetInterval(ActiveIntervalMs);
+                RefreshCommands();
             }
             catch (Exception exception)
             {
@@ -257,20 +260,24 @@ namespace ClassroomLive.Extension
         {
             // Process.Start 성공은 서버 준비 성공을 뜻하지 않는다. 런타임 누락처럼
             // 프로세스가 곧바로 끝나는 경우까지 잡으려고 실제 응답을 기다린다.
-            for (var attempt = 0; attempt < 40; attempt++)
+            for (var attempt = 0; attempt < 120; attempt++)
             {
                 await Task.Delay(250).ConfigureAwait(false);
                 var result = await PostAsync(new ExtensionUpdate { Action = "heartbeat" }).ConfigureAwait(false);
                 if (!result.ReachedHost) continue;
 
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
+                hostStarting = false;
                 ApplyReply(result);
+                RefreshCommands();
                 SetStatus("Classroom Live · 실행했습니다");
                 return;
             }
 
             await JoinableTaskFactory.SwitchToMainThreadAsync();
-            ShowLaunchError(exe, "10초 안에 서버 응답을 받지 못했습니다.");
+            hostStarting = false;
+            RefreshCommands();
+            ShowLaunchError(exe, "30초 안에 서버 응답을 받지 못했습니다.");
         }
 
         private async Task WaitForHostStopAsync()
