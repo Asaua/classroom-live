@@ -37,6 +37,8 @@
   let renderedFileId = "";
   let currentContent = "";
   let noticeTimer = 0;
+  let confirmResolve = null;
+  let confirmClosing = false;
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
@@ -57,8 +59,30 @@
     void refresh();
   });
 
-  $("mobileFiles").addEventListener("click", () => openFiles(true));
-  $("backdrop").addEventListener("click", () => openFiles(false));
+  $("mobileFiles").addEventListener("click", () => {
+    if ($("filePanel").classList.contains("is-open")) closeFiles();
+    else setFilesOpen(true, true);
+  });
+  $("backdrop").addEventListener("click", closeFiles);
+  addEventListener("popstate", (event) => {
+    setFilesOpen(event.state?.classroomFiles === true);
+    if ($("confirmDialog").open && event.state?.classroomConfirm !== true)
+      closeConfirm("cancel", false);
+  });
+  addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && $("filePanel").classList.contains("is-open")) {
+      event.preventDefault();
+      closeFiles();
+    }
+  });
+  $("confirmForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeConfirm(event.submitter?.value || "cancel");
+  });
+  $("confirmDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeConfirm("cancel");
+  });
 
   $("toggleWrap").addEventListener("click", () => {
     wrapEnabled = !wrapEnabled;
@@ -131,8 +155,7 @@
 
   $("shutdown").addEventListener("click", async () => {
     const student = latestHostState?.classroom?.viewers ?? 0;
-    const warning = student > 0 ? ` 지금 ${student}명이 보고 있어요.` : "";
-    if (!await confirmPopup(`수업을 종료할까요?${warning}`, "종료")) return;
+    if (!await confirmShutdown(student)) return;
 
     shuttingDown = true;
     try {
@@ -209,9 +232,18 @@
     localStorage.setItem("classroom-live:note-read", "1");
   }
 
-  function openFiles(open) {
+  function setFilesOpen(open, addHistory = false) {
     $("filePanel").classList.toggle("is-open", open);
     $("backdrop").hidden = !open;
+    $("mobileFiles").setAttribute("aria-expanded", String(open));
+    $("mobileFiles").setAttribute("aria-label", `공유 파일 목록 ${open ? "닫기" : "열기"}`);
+    if (open && addHistory && history.state?.classroomFiles !== true)
+      history.pushState({ ...history.state, classroomFiles: true }, "");
+  }
+
+  function closeFiles() {
+    if (history.state?.classroomFiles === true) history.back();
+    else setFilesOpen(false);
   }
 
   function showGate(message) {
@@ -262,10 +294,33 @@
 
   const notify = (message) => popup(message, null);
 
-  const confirmPopup = (message, label) => new Promise((resolve) => popup(message, [
-    { label: "취소", select: () => resolve(false) },
-    { label, danger: true, select: () => resolve(true) },
-  ]));
+  function confirmShutdown(viewers) {
+    const dialog = $("confirmDialog");
+    const message = $("confirmMessage");
+    message.textContent = viewers > 0 ? `현재 ${viewers}명이 수업을 보고 있습니다.` : "";
+    message.hidden = viewers === 0;
+    dialog.returnValue = "cancel";
+    history.pushState({ ...history.state, classroomConfirm: true }, "");
+    dialog.showModal();
+    return new Promise((resolve) => { confirmResolve = resolve; });
+  }
+
+  function closeConfirm(value, popHistory = true) {
+    const dialog = $("confirmDialog");
+    if (!dialog.open || confirmClosing) return;
+    confirmClosing = true;
+    dialog.classList.add("is-closing");
+    const delay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160;
+    setTimeout(() => {
+      dialog.classList.remove("is-closing");
+      dialog.close(value);
+      confirmClosing = false;
+      if (popHistory && history.state?.classroomConfirm === true) history.back();
+      const resolve = confirmResolve;
+      confirmResolve = null;
+      resolve?.(value === "confirm");
+    }, delay);
+  }
 
   // 학생은 http로 접속하므로 navigator.clipboard가 없다. crypto.randomUUID와 같은 함정이다.
   async function copyText(text) {
@@ -685,7 +740,7 @@ while with yield None True False
       selectedId = file.id;
       localStorage.setItem("classroom-live:selected-file", selectedId);
       setFollowing(false);
-      openFiles(false);
+      closeFiles();
       // 직접 골랐다는 건 안내를 이해했다는 뜻이다.
       dismissNote();
       if (latestClassroom) render(latestClassroom, latestHostState);

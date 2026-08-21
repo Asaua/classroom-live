@@ -5,6 +5,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyDescription("현재 파일을 Classroom Live에 명시적으로 공유합니다.")]
 [assembly: AssemblyCompany("Asau")]
 [assembly: AssemblyProduct("Classroom Live")]
-[assembly: AssemblyVersion("1.2.1.0")]
-[assembly: AssemblyFileVersion("1.2.1.0")]
+[assembly: AssemblyVersion("1.2.2.0")]
+[assembly: AssemblyFileVersion("1.2.2.0")]
 [assembly: ComVisible(false)]
