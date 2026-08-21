@@ -20,7 +20,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.1")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -62,7 +62,7 @@ namespace ClassroomLive.Extension
         private readonly HashSet<string> sharedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> hiddenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private dynamic dte;
-        private WindowEvents windowEvents;
+        private string lastActiveFilePath;
         private OleMenuCommand hostCommand;
         private OleMenuCommand pauseCommand;
         private OleMenuCommand shareCommand;
@@ -94,8 +94,6 @@ namespace ClassroomLive.Extension
                 hideCommand = Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
             }
 
-            windowEvents = ((DTE)dte).Events.WindowEvents;
-            windowEvents.WindowActivated += OnWindowActivated;
             syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
 
@@ -112,7 +110,6 @@ namespace ClassroomLive.Extension
             if (disposing)
             {
                 syncTimer?.Dispose();
-                if (windowEvents != null) windowEvents.WindowActivated -= OnWindowActivated;
             }
             base.Dispose(disposing);
         }
@@ -152,13 +149,6 @@ namespace ClassroomLive.Extension
             // 공유 목록에 없는 파일은 숨길 것도 없다.
             command.Enabled = hostReachable && path != null && sharedFiles.Contains(path);
             command.Text = path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
-        }
-
-        private void OnWindowActivated(Window gotFocus, Window lostFocus)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            RefreshCommands();
-            SyncActiveFile(null);
         }
 
         private void RefreshCommands()
@@ -359,6 +349,11 @@ namespace ClassroomLive.Extension
                         Focused = IsVisualStudioForeground()
                     };
                     var path = update.FilePath;
+                    if (!string.Equals(lastActiveFilePath, path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastActiveFilePath = path;
+                        RefreshCommands();
+                    }
                     // 주인이 아닌 창은 호스트가 어차피 무시한다. 문서 전체를 읽어
                     // UI 스레드를 붙잡을 이유가 없다.
                     var isShared = isOwner && path != null && sharedFiles.Contains(path);
