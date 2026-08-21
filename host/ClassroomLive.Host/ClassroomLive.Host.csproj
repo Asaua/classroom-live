@@ -8,10 +8,22 @@
     <OutputType>WinExe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.2.2</Version>
+    <AssemblyVersion>1.2.2.0</AssemblyVersion>
+    <FileVersion>1.2.2.0</FileVersion>
+    <Authors>Asau</Authors>
+    <Company>Asau</Company>
+    <Product>Classroom Live</Product>
+    <Description>Visual Studio 코드를 같은 네트워크의 학생에게 공유합니다.</Description>
+    <ApplicationIcon>..\..\assets\ClassroomLiveIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="README.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\ClassroomLiveIcon.png"
+             Link="wwwroot\favicon.png"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
     <!-- Web SDK는 publish 때만 wwwroot를 내보낸다. build 산출물로 바로 실행해도
          화면이 뜨도록 출력 폴더에도 복사한다. -->
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />

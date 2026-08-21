@@ -45,6 +45,11 @@
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </None>
+    <Content Include="..\..\assets\ClassroomLiveIcon.png">
+      <Link>Resources\ClassroomLiveIcon.png</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>Resources</VSIXSubPath>
+    </Content>
     <VSCTCompile Include="ClassroomLivePackage.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
