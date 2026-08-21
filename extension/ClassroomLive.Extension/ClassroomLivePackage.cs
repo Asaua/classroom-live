@@ -137,7 +137,7 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             var path = ActiveFilePath();
-            command.Enabled = hostReachable && !string.IsNullOrWhiteSpace(path);
+            command.Enabled = hostReachable && everStarted && !string.IsNullOrWhiteSpace(path);
             command.Text = path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
         }
 
