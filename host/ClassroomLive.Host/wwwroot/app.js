@@ -49,6 +49,8 @@
   let noticeTimer = 0;
   let confirmResolve = null;
   let confirmClosing = false;
+  let restoreClosing = false;
+  let restorePromptBusy = false;
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
@@ -56,8 +58,7 @@
 
   // 한 번 읽으면 끝인 안내다. 교수 화면에는 애초에 필요 없고,
   // 학생도 닫거나 파일을 직접 골라보면 다시 뜨지 않는다.
-  if (!isHost && localStorage.getItem("classroom-live:note-read") !== "1")
-    $("followNote").hidden = false;
+  if (!isHost && localStorage.getItem("classroom-live:note-read") !== "1") showFollowNote();
   $("dismissNote").addEventListener("click", dismissNote);
   applyWrap();
   applyFont();
@@ -88,6 +89,8 @@
     setFilesOpen(event.state?.classroomFiles === true);
     if ($("confirmDialog").open && event.state?.classroomConfirm !== true)
       closeConfirm("cancel", false);
+    if ($("restoreDialog").open && event.state?.classroomRestore !== true)
+      closeRestore(false, false);
   });
   addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("filePanel").classList.contains("is-open")) {
@@ -102,6 +105,14 @@
   $("confirmDialog").addEventListener("cancel", (event) => {
     event.preventDefault();
     closeConfirm("cancel");
+  });
+  $("restoreForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeRestore(event.submitter?.value === "restore");
+  });
+  $("restoreDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeRestore(false);
   });
 
   $("toggleWrap").addEventListener("click", () => {
@@ -145,7 +156,6 @@
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
     if (button.dataset.shared === "1") return;
-    if (latestHostState?.everStarted !== true) return notify("먼저 수업을 시작해 주세요");
     // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
     if (button.dataset.shareable !== "1")
       return notify(button.dataset.reason || "공유할 수 없는 파일이에요");
@@ -157,7 +167,7 @@
         body: JSON.stringify({ enabled: true }),
       });
       notify(response.ok
-        ? "공유를 요청했어요"
+        ? (latestClassroom?.everStarted ? "공유를 요청했어요" : "준비 목록에 추가를 요청했어요")
         : "요청에 실패했어요");
     } catch {
       notify("확장에 연결하지 못했어요");
@@ -225,8 +235,11 @@
         headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
         body: JSON.stringify({ hidden }),
       });
+      const preparing = latestClassroom?.everStarted !== true;
       notify(response.ok
-        ? (hidden ? "학생 화면에서 숨겼어요" : "다시 보이게 했어요")
+        ? (preparing
+          ? (hidden ? "숨김 상태로 준비했어요" : "보이는 상태로 준비했어요")
+          : (hidden ? "학생 화면에서 숨겼어요" : "다시 보이게 했어요"))
         : "요청에 실패했어요");
     } catch {
       notify("요청에 실패했어요");
@@ -247,9 +260,22 @@
     setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
   }
 
+  function showFollowNote() {
+    const note = $("followNote");
+    note.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => note.classList.add("is-visible")));
+  }
+
   function dismissNote() {
-    $("followNote").hidden = true;
+    const note = $("followNote");
     localStorage.setItem("classroom-live:note-read", "1");
+    if (note.hidden || note.classList.contains("is-closing")) return;
+    note.classList.add("is-closing");
+    const delay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160;
+    setTimeout(() => {
+      note.hidden = true;
+      note.classList.remove("is-visible", "is-closing");
+    }, delay);
   }
 
   function setFilesOpen(open, addHistory = false) {
@@ -339,6 +365,38 @@
       const resolve = confirmResolve;
       confirmResolve = null;
       resolve?.(value === "confirm");
+    }, delay);
+  }
+
+  function showRestore(count) {
+    if (restorePromptBusy || $("restoreDialog").open) return;
+    setText($("restoreMessage"), `직전 세션에서 사용한 파일 ${count}개가 있습니다.`);
+    history.pushState({ ...history.state, classroomRestore: true }, "");
+    $("restoreDialog").showModal();
+  }
+
+  function closeRestore(restore, popHistory = true) {
+    const dialog = $("restoreDialog");
+    if (!dialog.open || restoreClosing) return;
+    restoreClosing = true;
+    restorePromptBusy = true;
+    dialog.classList.add("is-closing");
+    const delay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160;
+    setTimeout(async () => {
+      dialog.classList.remove("is-closing");
+      dialog.close(restore ? "restore" : "skip");
+      restoreClosing = false;
+      if (popHistory && history.state?.classroomRestore === true) history.back();
+      try {
+        await fetch("/api/host/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+          body: JSON.stringify({ enabled: restore }),
+        });
+      } finally {
+        restorePromptBusy = false;
+        await refresh();
+      }
     }, delay);
   }
 
@@ -461,20 +519,21 @@
     }
 
     const files = Array.isArray(classroom.files) ? classroom.files : [];
+    const readableFiles = files.filter((file) => !file.pending && !file.missing);
 
     // 보던 파일이 사라졌으면 말없이 갈아치우지 않고 알려준다.
-    if (selectedId && !files.some((file) => file.id === selectedId)) {
-      const next = classroom.professorActiveId || files[0]?.id || "";
+    if (selectedId && !readableFiles.some((file) => file.id === selectedId)) {
+      const next = classroom.professorActiveId || readableFiles[0]?.id || "";
       // 옮겨갈 파일이 없는데 "옮겼어요"라고 하면 안 된다.
       if (selectedName) notify(next
         ? `${selectedName} 공유가 끝나 다른 파일로 옮겼어요`
         : `${selectedName} 공유가 끝났어요`);
       selectedId = next;
     } else if (!selectedId) {
-      selectedId = classroom.professorActiveId || files[0]?.id || "";
+      selectedId = classroom.professorActiveId || readableFiles[0]?.id || "";
     }
 
-    const selected = files.find((file) => file.id === selectedId);
+    const selected = readableFiles.find((file) => file.id === selectedId);
     const professor = files.find((file) => file.id === classroom.professorActiveId);
     selectedName = selected?.name || "";
 
@@ -885,17 +944,19 @@ while with yield None True False
     const { open, icon, name, updated, badge, remove, hide } = item.parts;
     const isSelected = file.id === selectedId;
 
-    const className = `file-item${isSelected ? " is-selected" : ""}${file.hidden ? " is-hidden-file" : ""}`;
+    const className = `file-item${isSelected ? " is-selected" : ""}${file.hidden ? " is-hidden-file" : ""}${file.pending ? " is-pending-file" : ""}${file.missing ? " is-missing-file" : ""}`;
     if (item.className !== className) item.className = className;
     if (isSelected) open.setAttribute("aria-current", "page");
     else open.removeAttribute("aria-current");
 
-    setTitle(open, `${file.path} · ${file.language}`);
+    const pendingText = file.missing ? "파일을 찾을 수 없음" : "Visual Studio에서 파일을 열어 주세요";
+    setTitle(open, file.pending ? `${file.path} · ${pendingText}` : `${file.path} · ${file.language}`);
+    open.disabled = Boolean(file.pending);
     setText(icon, shortLanguage(file.language));
     setText(name, file.name);
-    setText(updated, relativeTime(file.updatedAt));
+    setText(updated, file.pending ? pendingText : relativeTime(file.updatedAt));
     badge.hidden = file.id !== professorActiveId;
-    if (remove) remove.setAttribute("aria-label", `${file.name} 공유 해제`);
+    if (remove) remove.setAttribute("aria-label", `${file.name} ${latestClassroom?.everStarted ? "공유 해제" : "준비 목록에서 제거"}`);
     if (hide) {
       // 아이콘은 상태를, aria-pressed는 눌린 상태(=숨김)를 나타낸다.
       const isHidden = Boolean(file.hidden);
@@ -917,6 +978,7 @@ while with yield None True False
     broadcastButton.classList.toggle("is-resume", !payload.broadcasting && payload.everStarted);
     setText($("hostStatus"), payload.visualStudioStatus);
     setTitle($("hostStatus"), payload.visualStudioStatus);
+    if (payload.restoreAvailable) showRestore(Number(payload.restoreFileCount) || 0);
 
     // 현재 Visual Studio 파일을 공유 목록의 +로 추가한다. 제거는 각 파일의 ×가 담당한다.
     const share = $("toggleShare");
@@ -929,13 +991,12 @@ while with yield None True False
     const shared = Boolean(payload.currentFileShared);
     const shareable = Boolean(payload.currentFileShareable);
     const displayPath = payload.currentFileDisplayPath || current;
-    const canAdd = payload.everStarted && shareable && !shared;
+    const canAdd = shareable && !shared;
     setText(label, current);
     setTitle(label, displayPath);
     setText(share, shared ? "✓" : "+");
     const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
     const action = shared ? `${current}은(는) 이미 추가되어 있습니다`
-      : !payload.everStarted ? `${current}은(는) 수업 시작 후 추가할 수 있습니다`
       : shareable ? `${current}을(를) 추가합니다` : reason;
     share.setAttribute("aria-label", action);
     setTitle(share, action);

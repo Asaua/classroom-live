@@ -288,6 +288,7 @@ button, input { font: inherit }
 .file-item:hover { background: #171c22 }
 .file-item.is-selected { border-color: #2d3641; background: #1a1f26 }
 .file-open { min-width: 0; flex: 1; align-self: stretch; gap: 11px; padding: 9px 10px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer }
+.file-open:disabled { cursor: default }
 .file-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
 .file-copy { min-width: 0; flex: 1 }
 .file-copy strong, .file-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -320,12 +321,23 @@ button, input { font: inherit }
 /* 숨긴 파일도 목록에 남는다. 학생에게 안 보인다는 것만 분명히 한다. */
 .file-item.is-hidden-file .file-copy strong,
 .file-item.is-hidden-file .file-icon { opacity: .45 }
+.file-item.is-pending-file .file-copy strong,
+.file-item.is-pending-file .file-icon { opacity: .5 }
+.file-item.is-missing-file .file-copy small { color: #d58a96 }
 .remove-file { width: 25px; height: 25px; flex: 0 0 auto; margin-right: 7px; border: 0; border-radius: 6px; background: transparent; color: #8a95a2; cursor: pointer }
 .remove-file:hover { background: #302027; color: #ff8b9b }
 .remove-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
 
 /* 한 번 읽으면 끝인 안내다. 닫으면 다시 뜨지 않는다. */
-.follow-note { position: relative; gap: 12px; margin: 10px; padding: 14px 34px 14px 14px; border: 1px solid #27303a; border-radius: 10px; background: #151a20 }
+.follow-note {
+  position: relative; gap: 12px; margin: 10px; padding: 14px 34px 14px 14px;
+  border: 1px solid #27303a; border-radius: 10px; background: #151a20;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .28);
+  opacity: 0; transform: translateY(8px) scale(.985);
+  transition: opacity 220ms ease, transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease;
+}
+.follow-note.is-visible { opacity: 1; transform: none }
+.follow-note.is-closing { opacity: 0; transform: translateY(5px) scale(.99); box-shadow: none; transition-duration: 160ms }
 .note-close {
   position: absolute; top: 8px; right: 8px;
   width: 22px; height: 22px;
@@ -393,6 +405,7 @@ button, input { font: inherit }
 .confirm-card { padding: 26px; border: 1px solid #303946; border-radius: 16px; background: #13181e }
 .confirm-card h1 { margin: 7px 0 0; font-size: 21px; letter-spacing: -.03em }
 .confirm-card p { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6 }
+.confirm-card .restore-safe { color: #8793a1; font-size: 11px }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 26px }
 .confirm-actions button { min-width: 76px }
 @keyframes confirm-in {

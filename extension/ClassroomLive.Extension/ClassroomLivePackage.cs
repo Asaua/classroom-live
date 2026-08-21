@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.4")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.5")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -76,6 +76,9 @@ namespace ClassroomLive.Extension
         private int intervalMs = ActiveIntervalMs;
         private int failureStreak;
         private int refreshingSharedFiles;
+        private string lastRestoreId;
+        private string lastSessionId;
+        private readonly HashSet<string> restoredPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool? toolbarVisible;
 
         // 마지막 폴링에서 받은 호스트 상태. 메뉴 글자와 활성 여부를 여기서 정한다.
@@ -179,8 +182,8 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             var path = ActiveFilePath();
-            command.Enabled = hostReachable && !hostStopping && everStarted && !string.IsNullOrWhiteSpace(path);
-            command.Text = hostReachable && !hostStopping && everStarted &&
+            command.Enabled = hostReachable && !hostStopping && !string.IsNullOrWhiteSpace(path);
+            command.Text = hostReachable && !hostStopping &&
                            path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
         }
 
@@ -191,7 +194,7 @@ namespace ClassroomLive.Extension
             var path = ActiveFilePath();
             // 공유 목록에 없는 파일은 숨길 것도 없다.
             command.Enabled = hostReachable && !hostStopping && path != null && sharedFiles.Contains(path);
-            command.Text = hostReachable && !hostStopping && everStarted &&
+            command.Text = hostReachable && !hostStopping &&
                            path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
         }
 
@@ -383,7 +386,8 @@ namespace ClassroomLive.Extension
                     ApplyReply(result, update.FilePath);
                     if (result.Status == HttpStatusCode.OK)
                     {
-                        SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유");
+                        SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) +
+                            (everStarted ? " 공유" : " 공유 예정"));
                     }
                     else
                     {
@@ -490,10 +494,43 @@ namespace ClassroomLive.Extension
             if (result.Reply.Ended) hostStopping = true;
             var resumedFromHost = !oldBroadcasting && oldEverStarted && broadcasting && result.Reply.Owner;
             var fileStateChanged = false;
+            if (!string.IsNullOrEmpty(result.Reply.SessionId) &&
+                !string.Equals(lastSessionId, result.Reply.SessionId, StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrEmpty(lastSessionId))
+                {
+                    sharedFiles.Clear();
+                    hiddenFiles.Clear();
+                    restoredPaths.Clear();
+                    lastRestoreId = null;
+                    fileStateChanged = true;
+                }
+                lastSessionId = result.Reply.SessionId;
+            }
             if (path != null)
             {
                 fileStateChanged = SetMembership(sharedFiles, path, result.Reply.Shared) |
                                    SetMembership(hiddenFiles, path, result.Reply.Hidden);
+            }
+            if (!string.IsNullOrEmpty(result.Reply.RestoreId) &&
+                result.Reply.RestoreFiles != null && result.Reply.RestoreFiles.Length > 0)
+            {
+                if (!string.Equals(lastRestoreId, result.Reply.RestoreId, StringComparison.Ordinal))
+                {
+                    lastRestoreId = result.Reply.RestoreId;
+                    restoredPaths.Clear();
+                }
+                var newFiles = result.Reply.RestoreFiles.Where(file => restoredPaths.Add(file.Path)).ToArray();
+                foreach (var file in newFiles)
+                {
+                    sharedFiles.Add(file.Path);
+                    SetMembership(hiddenFiles, file.Path, file.Hidden);
+                }
+                if (newFiles.Length > 0)
+                {
+                    fileStateChanged = true;
+                    _ = JoinableTaskFactory.RunAsync(() => RestoreSharedFilesAsync(newFiles));
+                }
             }
             if (fileStateChanged || oldReachable != hostReachable ||
                 oldBroadcasting != broadcasting || oldEverStarted != everStarted || oldStopping != hostStopping)
@@ -525,6 +562,32 @@ namespace ClassroomLive.Extension
             }
         }
 
+        private async Task RestoreSharedFilesAsync(RestoreFile[] files)
+        {
+            if (Interlocked.Exchange(ref refreshingSharedFiles, 1) != 0) return;
+            try
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                var updates = files.Select(file => CaptureSharedFile(file.Path))
+                    .Where(update => update != null).ToArray();
+                foreach (var update in updates)
+                {
+                    // 직전 목록이라도 민감 내용 검사는 새 세션에서 다시 확인한다.
+                    update.Action = "share";
+                    var result = await PostWithSensitiveConfirmationAsync(update);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (result.Status == HttpStatusCode.Conflict || result.Status == UnprocessableEntity)
+                        sharedFiles.Remove(update.FilePath);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref refreshingSharedFiles, 0);
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                RefreshCommands();
+            }
+        }
+
         /// <summary>교수 화면 버튼이 보낸 공유/해제 명령을 메뉴와 똑같이 처리한다.</summary>
         private async Task RunHostCommandAsync(string command, string path)
         {
@@ -539,7 +602,8 @@ namespace ClassroomLive.Extension
                 ApplyReply(result, path);
                 if (result.Status == HttpStatusCode.OK)
                 {
-                    SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유");
+                    SetStatus("Classroom Live · " + Path.GetFileName(path) +
+                        (everStarted ? " 공유" : " 공유 예정"));
                 }
                 else
                 {
@@ -834,6 +898,16 @@ namespace ClassroomLive.Extension
             [DataMember(Name = "blockReason")] public string BlockReason { get; set; }
             [DataMember(Name = "warning")] public string Warning { get; set; }
             [DataMember(Name = "shared")] public bool Shared { get; set; }
+            [DataMember(Name = "hidden")] public bool Hidden { get; set; }
+            [DataMember(Name = "restoreId")] public string RestoreId { get; set; }
+            [DataMember(Name = "restoreFiles")] public RestoreFile[] RestoreFiles { get; set; }
+            [DataMember(Name = "sessionId")] public string SessionId { get; set; }
+        }
+
+        [DataContract]
+        private sealed class RestoreFile
+        {
+            [DataMember(Name = "path")] public string Path { get; set; }
             [DataMember(Name = "hidden")] public bool Hidden { get; set; }
         }
 

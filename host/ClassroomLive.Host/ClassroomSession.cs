@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 sealed class ClassroomSession
@@ -19,6 +21,8 @@ sealed class ClassroomSession
     // 내용 경고를 교수가 한 번 승인한 파일. 서버를 다시 켜면 승인은 사라진다.
     private readonly HashSet<string> _approvedSensitiveFiles = [];
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
+    private readonly string? _presetPath;
+    private PresetEntry[] _savedPreset = [];
     private string? _professorActiveId;
     private string? _professorActiveName;
     private string? _professorWorkspaceId;
@@ -35,6 +39,10 @@ sealed class ClassroomSession
     private bool _broadcasting;
     private bool _everStarted;
     private bool _ended;
+    private bool _restoreDecisionMade;
+    private bool _restoredDraft;
+    private bool _draftTouched;
+    private string? _restoreId;
     // Visual Studio를 여러 개 열면 각 창의 확장이 전부 자기 활성 파일을 보낸다.
     // 한 창만 '주인'으로 두지 않으면 교수 화면과 학생 화면이 창 사이를 오가며 깜빡인다.
     private string? _ownerInstance;
@@ -43,7 +51,18 @@ sealed class ClassroomSession
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "연결 대기";
 
+    public ClassroomSession() { }
+
+    internal ClassroomSession(string presetPath)
+    {
+        _presetPath = presetPath;
+        _savedPreset = SessionPresetStore.Load(presetPath);
+    }
+
+    public static ClassroomSession CreatePersistent() => new(SessionPresetStore.FilePath);
+
     public string Pin { get; } = RandomNumberGenerator.GetInt32(100_000, 1_000_000).ToString();
+    public string SessionId { get; } = Guid.NewGuid().ToString("N");
     public string AdminToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     public string ExtensionToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 
@@ -102,9 +121,39 @@ sealed class ClassroomSession
         lock (_gate)
         {
             if (_ended) return;
+            var firstStart = enabled && !_everStarted;
             _broadcasting = enabled;
             // 처음 켜는 것과 멈췄다 다시 켜는 것을 화면에서 구분하려고 기억해둔다.
             if (enabled) _everStarted = true;
+            if (!firstStart || (!_restoredDraft && !_draftTouched)) return;
+
+            // 사라진 파일은 준비 화면에서는 이유를 보여주되, 실제 방송을 시작하면
+            // 대상과 다음 저장본에서 제외한다. 시작하지 않고 닫으면 이전 저장본은 그대로다.
+            foreach (var missing in _files.Values.Where(file => file.Missing).Select(file => file.Id).ToArray())
+                _files.Remove(missing);
+            SavePreset();
+        }
+    }
+
+    /// <summary>직전 세션 목록을 이번 준비 화면에 복사한다. 건너뛰기는 저장본을 지우지 않는다.</summary>
+    public bool DecideRestore(bool restore)
+    {
+        lock (_gate)
+        {
+            if (_everStarted || _restoreDecisionMade) return false;
+            _restoreDecisionMade = true;
+            if (!restore) return true;
+
+            foreach (var entry in _savedPreset)
+            {
+                var file = PreparedFile(entry);
+                if (file is null) continue;
+                _files[file.Id] = file;
+                _unsharedFiles.Remove(file.Id);
+            }
+            _restoredDraft = _files.Count > 0;
+            _restoreId = _restoredDraft ? Guid.NewGuid().ToString("N") : null;
+            return true;
         }
     }
 
@@ -129,6 +178,13 @@ sealed class ClassroomSession
             _lastExtensionHeartbeat = DateTimeOffset.UtcNow;
 
             var action = request.Action?.ToLowerInvariant();
+            var restoreUpdate = false;
+            try
+            {
+                restoreUpdate = action == "refresh" && !string.IsNullOrWhiteSpace(request.FilePath) &&
+                                _files.TryGetValue(FileId(request.FilePath), out var staged) && staged.Pending;
+            }
+            catch { /* 아래 보안 검사에서 잘못된 경로를 거른다. */ }
 
             // 교수가 그 창에서 직접 누른 조작이면 주인을 그쪽으로 넘긴다.
             // 그래야 다른 창으로 옮겨가서 공유를 눌렀을 때 바로 먹는다.
@@ -139,12 +195,12 @@ sealed class ClassroomSession
             {
                 _ownerInstance = instance;
             }
-            if (_ownerInstance != instance)
+            if (_ownerInstance != instance && !restoreUpdate)
             {
                 // 주인이 아닌 창의 폴링은 무시한다. 무시해야 깜빡이지 않는다.
                 return ExtensionUpdateOutcome.Accepted;
             }
-            _ownerSeenAt = DateTimeOffset.UtcNow;
+            if (_ownerInstance == instance) _ownerSeenAt = DateTimeOffset.UtcNow;
             var blockReason = string.IsNullOrWhiteSpace(request.FilePath)
                 ? null
                 : SecurityRules.BlockReason(request.FilePath, request.SolutionRoot ?? "", request.Content);
@@ -180,6 +236,7 @@ sealed class ClassroomSession
                 {
                     _files[activeId] = target with { Hidden = action == "hide" };
                     _visualStudioStatus = target.Name + (action == "hide" ? " · 숨김" : " · 다시 보임");
+                    PresetChanged();
                 }
                 return ExtensionUpdateOutcome.Accepted;
             }
@@ -193,13 +250,17 @@ sealed class ClassroomSession
                     _unsharedFiles.Remove(id);
                     _approvedSensitiveFiles.Remove(id);
                     if (_professorActiveId == id) ClearProfessorPointer();
+                    PresetChanged();
                 }
                 _visualStudioStatus = "공유 해제됨";
                 return ExtensionUpdateOutcome.Accepted;
             }
 
+            var prepareShare = !_everStarted && action == "share";
+            var updatePrepared = !_everStarted && activeId is not null && _files.ContainsKey(activeId) &&
+                                 action is "sync" or "refresh";
             var shareWhilePaused = _everStarted && action == "share";
-            if (!_broadcasting && !shareWhilePaused)
+            if (!_broadcasting && !shareWhilePaused && !prepareShare && !updatePrepared)
             {
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
@@ -252,7 +313,9 @@ sealed class ClassroomSession
                 return ExtensionUpdateOutcome.Unshared;
             }
 
+            var wasReady = activeId is not null && _files.TryGetValue(activeId, out var before) && !before.Pending;
             UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
+            if (action == "share" || (_everStarted && !wasReady)) PresetChanged();
             if (_broadcasting && action != "refresh")
             {
                 _professorActiveName = Path.GetFileName(request.FilePath);
@@ -264,7 +327,9 @@ sealed class ClassroomSession
             if (action != "refresh")
                 _visualStudioStatus = _broadcasting
                     ? $"{Path.GetFileName(request.FilePath)} · 공유 중"
-                    : $"{Path.GetFileName(request.FilePath)} · 추가됨 · 일시정지";
+                    : _everStarted
+                        ? $"{Path.GetFileName(request.FilePath)} · 추가됨 · 일시정지"
+                        : $"{Path.GetFileName(request.FilePath)} · 추가됨 · 시작 전";
             return ExtensionUpdateOutcome.Accepted;
         }
     }
@@ -292,14 +357,23 @@ sealed class ClassroomSession
 
         if (_files.TryGetValue(id, out var existing))
         {
-            if (!string.Equals(existing.Content, content, StringComparison.Ordinal))
-                _files[id] = existing with { Content = content, UpdatedAt = now };
+            if (!string.Equals(existing.Content, content, StringComparison.Ordinal) || existing.Pending)
+                _files[id] = existing with
+                {
+                    Content = content,
+                    UpdatedAt = now,
+                    Pending = false,
+                    Missing = false,
+                    FullPath = normalizedPath,
+                    SolutionRoot = normalizedRoot
+                };
         }
         else
         {
             _files[id] = new SharedFile(id, Path.GetFileName(normalizedPath), relativePath,
                 SecurityRules.LanguageFor(normalizedPath), now, content, Hidden: false,
-                workspaceId, string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName);
+                workspaceId, string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
+                normalizedPath, normalizedRoot, Pending: false, Missing: false);
         }
 
         TrimOldFiles();
@@ -357,6 +431,13 @@ sealed class ClassroomSession
                 warning = null;
             }
 
+            var restoreFiles = string.IsNullOrWhiteSpace(_restoreId) || string.IsNullOrWhiteSpace(solutionRoot)
+                ? []
+                : _files.Values
+                    .Where(file => file.Pending && SamePath(file.SolutionRoot, solutionRoot))
+                    .Select(file => new RestoreFile(file.FullPath, file.Hidden))
+                    .ToArray();
+
             return new ExtensionReply(
                 owner,
                 owner ? TakePendingCommand() : null,
@@ -367,7 +448,10 @@ sealed class ClassroomSession
                 blockReason,
                 warning,
                 shared,
-                hidden);
+                hidden,
+                _restoreId,
+                restoreFiles,
+                SessionId);
         }
     }
 
@@ -429,6 +513,7 @@ sealed class ClassroomSession
             _approvedSensitiveFiles.Remove(id);
             _files.Remove(id);
             if (_professorActiveId == id) ClearProfessorPointer();
+            PresetChanged();
         }
     }
 
@@ -440,6 +525,7 @@ sealed class ClassroomSession
             if (!_files.TryGetValue(id, out var file)) return false;
             _files[id] = file with { Hidden = hidden };
             if (hidden && _professorActiveId == id) _professorActiveId = null;
+            PresetChanged();
             return true;
         }
     }
@@ -449,8 +535,8 @@ sealed class ClassroomSession
         lock (_gate)
         {
             PruneViewers();
-            // 학생에게는 숨긴 파일을 보내지 않는다.
-            return Snapshot(file => !file.Hidden);
+            // 시작 전 준비 목록과 아직 내용을 다시 못 읽은 파일은 학생에게 보내지 않는다.
+            return Snapshot(file => _everStarted && !file.Hidden && !file.Pending && !file.Missing);
         }
     }
 
@@ -469,8 +555,44 @@ sealed class ClassroomSession
                 connected ? _currentFileBlockReason : null,
                 connected && CurrentFileIsShared(),
                 connected && CurrentFileIsHidden(),
+                !_everStarted && !_restoreDecisionMade && _savedPreset.Length > 0,
+                _savedPreset.Length,
                 Pin, studentUrls);
         }
+    }
+
+    private SharedFile? PreparedFile(PresetEntry entry)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(entry.FilePath);
+            var root = Path.GetFullPath(entry.SolutionRoot);
+            if (SecurityRules.BlockReason(fullPath, root, null) is not null) return null;
+            var workspaceName = Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
+            return new SharedFile(FileId(fullPath), Path.GetFileName(fullPath),
+                Path.GetRelativePath(root, fullPath).Replace('\\', '/'), SecurityRules.LanguageFor(fullPath),
+                DateTimeOffset.Now, "", entry.Hidden, FileId(root),
+                string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
+                fullPath, root, Pending: true, Missing: !File.Exists(fullPath));
+        }
+        catch { return null; }
+    }
+
+    private void PresetChanged()
+    {
+        if (_everStarted) SavePreset();
+        else _draftTouched = true;
+    }
+
+    private void SavePreset()
+    {
+        if (_presetPath is null) return;
+        var preset = _files.Values.Where(file => !file.Missing)
+            .Select(file => new PresetEntry(file.FullPath, file.SolutionRoot, file.Hidden))
+            .DistinctBy(entry => entry.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .ToArray();
+        if (SessionPresetStore.Save(_presetPath, preset)) _savedPreset = preset;
     }
 
     private bool CurrentFileIsShared() =>
@@ -488,6 +610,16 @@ sealed class ClassroomSession
             return string.IsNullOrEmpty(rootName) ? relative : $"{rootName}/{relative}";
         }
         catch { return Path.GetFileName(filePath); }
+    }
+
+    private static bool SamePath(string first, string second)
+    {
+        try
+        {
+            return Path.GetFullPath(first).Equals(Path.GetFullPath(second),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include)
@@ -582,7 +714,12 @@ sealed record ExtensionReply(
     string? BlockReason,
     string? Warning,
     bool Shared,
-    bool Hidden);
+    bool Hidden,
+    string? RestoreId,
+    RestoreFile[] RestoreFiles,
+    string SessionId);
+
+sealed record RestoreFile(string Path, bool Hidden);
 
 enum ExtensionUpdateOutcome
 {
@@ -604,7 +741,11 @@ sealed record SharedFile(
     string Content,
     bool Hidden,
     string WorkspaceId,
-    string WorkspaceName);
+    string WorkspaceName,
+    [property: JsonIgnore] string FullPath,
+    [property: JsonIgnore] string SolutionRoot,
+    bool Pending,
+    bool Missing);
 
 sealed record ClassroomSnapshot(
     string ClassName,
@@ -635,8 +776,46 @@ sealed record HostSnapshot(
     string? CurrentFileBlockReason,
     bool CurrentFileShared,
     bool CurrentFileHidden,
+    bool RestoreAvailable,
+    int RestoreFileCount,
     string Pin,
     string[] StudentUrls);
+
+sealed record PresetEntry(string FilePath, string SolutionRoot, bool Hidden);
+
+static class SessionPresetStore
+{
+    public static string FilePath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ClassroomLive", "last-session.json");
+
+    public static PresetEntry[] Load(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return [];
+            return (JsonSerializer.Deserialize<PresetEntry[]>(File.ReadAllText(path)) ?? [])
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.FilePath) &&
+                                !string.IsNullOrWhiteSpace(entry.SolutionRoot))
+                .Take(40)
+                .ToArray();
+        }
+        catch { return []; }
+    }
+
+    public static bool Save(string path, PresetEntry[] entries)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temporary = path + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(entries));
+            File.Move(temporary, path, true);
+            return true;
+        }
+        catch { return false; }
+    }
+}
 
 static class SecurityRules
 {
@@ -862,6 +1041,66 @@ static class SecurityRules
             "값이 없는 비밀번호 처리 코드는 경고하지 않는다");
 
         SessionSelfTest();
+        PresetSelfTest();
+    }
+
+    private static void PresetSelfTest()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "ClassroomLivePresetTest", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(folder, "Solution");
+        var file = Path.Combine(root, "Main.cs");
+        var presetPath = Path.Combine(folder, "last-session.json");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(file, "class Main {}");
+
+        try
+        {
+            var session = new ClassroomSession(presetPath);
+            session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Main {}", 1));
+            var id = session.GetHostSnapshot([]).Classroom.Files.Single().Id;
+            session.SetHidden(id, true);
+            Assert(!File.Exists(presetPath), "시작 전 준비 목록은 이전 저장본을 덮어쓰지 않는다");
+
+            session.SetBroadcasting(true);
+            var saved = SessionPresetStore.Load(presetPath);
+            Assert(saved.Length == 1 && saved[0].Hidden, "시작한 준비 목록의 공유·숨김 상태를 저장한다");
+
+            var skipped = new ClassroomSession(presetPath);
+            Assert(skipped.GetHostSnapshot([]).RestoreAvailable, "직전 목록이 있으면 복원을 제안한다");
+            Assert(skipped.DecideRestore(false), "이번 복원을 건너뛸 수 있다");
+            Assert(skipped.GetHostSnapshot([]).Classroom.Files.Length == 0, "건너뛰면 준비 목록은 비어 있다");
+            skipped.End();
+
+            var reopened = new ClassroomSession(presetPath);
+            Assert(reopened.GetHostSnapshot([]).RestoreAvailable,
+                "건너뛰고 시작하지 않은 채 종료해도 저장본은 남는다");
+            Assert(reopened.DecideRestore(true), "직전 목록을 준비 화면에 불러온다");
+            var prepared = reopened.GetHostSnapshot([]).Classroom.Files.Single();
+            Assert(prepared.Pending && prepared.Hidden, "내용 없이 공유·숨김 준비 상태만 복원한다");
+            Assert(reopened.GetSnapshot().Files.Length == 0, "시작 전 준비 목록은 학생에게 보내지 않는다");
+            var restoreReply = reopened.BuildReply("window", file, root);
+            Assert(restoreReply.RestoreFiles.Length == 1 && restoreReply.RestoreFiles[0].Hidden,
+                "해당 솔루션의 확장에만 복원할 경로와 숨김 상태를 보낸다");
+            Assert(reopened.BuildReply("other", file, Path.Combine(folder, "Other")).RestoreFiles.Length == 0,
+                "다른 솔루션 창에는 복원 경로를 보내지 않는다");
+            Assert(!JsonSerializer.Serialize(reopened.GetHostSnapshot([])).Contains(file,
+                    StringComparison.OrdinalIgnoreCase),
+                "전체 로컬 경로는 브라우저 응답에 노출하지 않는다");
+
+            File.Delete(file);
+            var missing = new ClassroomSession(presetPath);
+            missing.DecideRestore(true);
+            Assert(missing.GetHostSnapshot([]).Classroom.Files.Single().Missing,
+                "사라진 파일은 암묵적으로 지우지 않고 표시한다");
+            missing.SetBroadcasting(true);
+            Assert(SessionPresetStore.Load(presetPath).Length == 0,
+                "사라진 파일은 실제 방송을 시작하면 다음 저장본에서 제외한다");
+        }
+        finally
+        {
+            try { Directory.Delete(folder, recursive: true); }
+            catch { }
+        }
     }
 
     private static void SessionSelfTest()

@@ -44,7 +44,7 @@ var port = int.TryParse(Environment.GetEnvironmentVariable("CLASSROOM_LIVE_PORT"
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 // 코드 100만 글자를 JSON/UTF-8로 보낼 수 있게 하되 Kestrel 기본 30MB보다 훨씬 작게 막는다.
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 8 * 1024 * 1024);
-builder.Services.AddSingleton<ClassroomSession>();
+builder.Services.AddSingleton(_ => ClassroomSession.CreatePersistent());
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -160,6 +160,14 @@ app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest reques
 
     session.SetBroadcasting(request.Enabled);
     return Results.Ok();
+});
+
+app.MapPost("/api/host/restore", (HttpContext context, RestoreRequest request, ClassroomSession session) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    return session.DecideRestore(request.Enabled) ? Results.Ok() : Results.Conflict();
 });
 
 app.MapPost("/api/host/share", (HttpContext context, BroadcastRequest request, ClassroomSession session) =>
@@ -448,6 +456,7 @@ static bool IsLocalExtension(HttpContext context, ClassroomSession session)
 }
 
 record BroadcastRequest(bool Enabled);
+record RestoreRequest(bool Enabled);
 record HiddenRequest(bool Hidden);
 record ExtensionUpdateRequest(
     string Action,

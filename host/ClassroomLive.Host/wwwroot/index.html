@@ -117,6 +117,19 @@
     </form>
   </dialog>
 
+  <dialog class="confirm-dialog" id="restoreDialog" aria-labelledby="restoreTitle">
+    <form class="confirm-card" id="restoreForm" method="dialog">
+      <span class="eyebrow">Classroom Live</span>
+      <h1 id="restoreTitle">이전 공유 목록을 불러올까요?</h1>
+      <p id="restoreMessage"></p>
+      <p class="restore-safe">건너뛰어도 저장된 목록은 삭제되지 않습니다.</p>
+      <div class="confirm-actions">
+        <button class="secondary-button" type="submit" value="skip">이번에는 건너뛰기</button>
+        <button class="primary-button" type="submit" value="restore" autofocus>불러오기</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="ended" id="ended" role="alertdialog" aria-labelledby="endedTitle" hidden>
     <div class="ended-copy">
       <img class="brand-mark" src="/favicon.png" alt="">
