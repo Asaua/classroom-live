@@ -19,6 +19,7 @@
   let selectedName = "";
   let latestHostState = null;
   let latestClassroom = null;
+  const collapsedWorkspaces = loadStringSet("classroom-live:collapsed-workspaces");
   let requestRunning = false;
   let blockedUntil = 0;
   let shuttingDown = false;
@@ -485,7 +486,7 @@
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
-    const professorName = classroom.professorActiveName || professor?.name ||
+    const professorName = ended ? "종료됨" : classroom.professorActiveName || professor?.name ||
       (classroom.professorAway ? "자리비움" : live ? "없음" : started ? "일시정지" : "시작 전");
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
@@ -517,7 +518,7 @@
     }
 
     applyProfessorLine(classroom, selected);
-    renderFiles(files, classroom.professorActiveId);
+    renderFiles(files, classroom.professorActiveId, classroom.professorWorkspaceId);
     if (isHost) renderHost(payload);
   }
 
@@ -724,19 +725,94 @@ while with yield None True False
   }
   // ---------------------------------------------------------------------
 
-  // 목록을 통째로 다시 만들지 않고 id 기준으로 맞춰 넣는다.
-  // 그래야 폴링할 때마다 포커스와 선택이 날아가지 않는다.
-  function renderFiles(files, professorActiveId) {
+  // 프로젝트와 파일 노드를 id 기준으로 재사용한다. 폴링할 때마다 다시 만들면
+  // 접기 애니메이션과 키보드 포커스가 계속 끊긴다.
+  function renderFiles(files, professorActiveId, professorWorkspaceId) {
     const list = $("fileList");
+    const grouped = new Map();
+    for (const file of files) {
+      const id = file.workspaceId || "workspace";
+      if (!grouped.has(id)) grouped.set(id, { id, name: file.workspaceName || "프로젝트", files: [] });
+      grouped.get(id).files.push(file);
+    }
+    const groups = Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    list.classList.toggle("has-multiple-workspaces", groups.length > 1);
+
     const leftover = new Map();
-    for (const node of Array.from(list.children)) leftover.set(node.dataset.fileId, node);
+    for (const node of Array.from(list.children)) leftover.set(node.dataset.workspaceId, node);
+
+    groups.forEach((workspace, index) => {
+      let group = leftover.get(workspace.id);
+      if (group) leftover.delete(workspace.id);
+      else group = createWorkspaceGroup(workspace.id);
+      updateWorkspaceGroup(group, workspace, professorActiveId, professorWorkspaceId);
+      if (list.children[index] !== group) list.insertBefore(group, list.children[index] ?? null);
+    });
+
+    for (const stale of leftover.values()) stale.remove();
+  }
+
+  function createWorkspaceGroup(workspaceId) {
+    const group = document.createElement("section");
+    group.className = "file-group";
+    group.dataset.workspaceId = workspaceId;
+
+    const heading = document.createElement("button");
+    heading.type = "button";
+    heading.className = "workspace-heading";
+    const chevron = document.createElement("span");
+    chevron.className = "workspace-chevron";
+    chevron.textContent = "›";
+    chevron.setAttribute("aria-hidden", "true");
+    const name = document.createElement("strong");
+    const line = document.createElement("span");
+    line.className = "workspace-line";
+    line.setAttribute("aria-hidden", "true");
+    heading.append(chevron, name, line);
+
+    const body = document.createElement("div");
+    body.className = "workspace-body";
+    const items = document.createElement("div");
+    items.className = "workspace-items";
+    body.append(items);
+    group.append(heading, body);
+
+    heading.addEventListener("click", () => {
+      if (collapsedWorkspaces.has(workspaceId)) collapsedWorkspaces.delete(workspaceId);
+      else collapsedWorkspaces.add(workspaceId);
+      saveStringSet("classroom-live:collapsed-workspaces", collapsedWorkspaces);
+      setWorkspaceCollapsed(group, collapsedWorkspaces.has(workspaceId));
+    });
+    group.parts = { heading, name, items };
+    return group;
+  }
+
+  function updateWorkspaceGroup(group, workspace, professorActiveId, professorWorkspaceId) {
+    const active = workspace.id === professorWorkspaceId;
+    group.classList.toggle("is-professor-workspace", active);
+    setText(group.parts.name, workspace.name);
+    setTitle(group.parts.heading, `${workspace.name} ${collapsedWorkspaces.has(workspace.id) ? "펼치기" : "접기"}`);
+    setWorkspaceCollapsed(group, collapsedWorkspaces.has(workspace.id));
+    renderWorkspaceFiles(group.parts.items, workspace.files, professorActiveId);
+  }
+
+  function setWorkspaceCollapsed(group, collapsed) {
+    group.classList.toggle("is-collapsed", collapsed);
+    group.parts.heading.setAttribute("aria-expanded", String(!collapsed));
+    group.parts.items.setAttribute("aria-hidden", String(collapsed));
+    group.parts.items.inert = collapsed;
+  }
+
+  function renderWorkspaceFiles(container, files, professorActiveId) {
+    const leftover = new Map();
+    for (const node of Array.from(container.children)) leftover.set(node.dataset.fileId, node);
 
     files.forEach((file, index) => {
       let item = leftover.get(file.id);
       if (item) leftover.delete(file.id);
       else item = createFileItem(file);
       updateFileItem(item, file, professorActiveId);
-      if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+      if (container.children[index] !== item) container.insertBefore(item, container.children[index] ?? null);
     });
 
     for (const stale of leftover.values()) stale.remove();
@@ -886,6 +962,19 @@ while with yield None True False
     setConnection(view.connection, view.kind);
     setText($("syncStatus"), view.sync);
     $("viewerCount").parentElement.hidden = !view.viewers;
+  }
+
+  function loadStringSet(key) {
+    try {
+      const values = JSON.parse(localStorage.getItem(key) || "[]");
+      return new Set(Array.isArray(values) ? values : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveStringSet(key, values) {
+    localStorage.setItem(key, JSON.stringify(Array.from(values)));
   }
 
   function shortLanguage(language) {

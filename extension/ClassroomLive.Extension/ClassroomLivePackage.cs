@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.3")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.4")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -169,7 +169,9 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             command.Enabled = hostReachable && !hostStopping;
-            command.Text = broadcasting ? "일시정지" : everStarted ? "재개" : "시작";
+            command.Text = !hostReachable || hostStopping
+                ? "시작"
+                : broadcasting ? "일시정지" : everStarted ? "재개" : "시작";
         }
 
         private void QueryShare(object sender, EventArgs e)
@@ -178,7 +180,8 @@ namespace ClassroomLive.Extension
             var command = (OleMenuCommand)sender;
             var path = ActiveFilePath();
             command.Enabled = hostReachable && !hostStopping && everStarted && !string.IsNullOrWhiteSpace(path);
-            command.Text = path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
+            command.Text = hostReachable && !hostStopping && everStarted &&
+                           path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
         }
 
         private void QueryHide(object sender, EventArgs e)
@@ -188,7 +191,8 @@ namespace ClassroomLive.Extension
             var path = ActiveFilePath();
             // 공유 목록에 없는 파일은 숨길 것도 없다.
             command.Enabled = hostReachable && !hostStopping && path != null && sharedFiles.Contains(path);
-            command.Text = path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
+            command.Text = hostReachable && !hostStopping && everStarted &&
+                           path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
         }
 
         private void RefreshCommands()
