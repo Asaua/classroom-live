@@ -1,4 +1,6 @@
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Settings;
+using Microsoft.VisualStudio.Shell.Settings;
 using EnvDTE;
 using System;
 using System.Collections.Generic;
@@ -38,6 +40,8 @@ namespace ClassroomLive.Extension
         private const int StartCommandId = 0x0101;
         private const int TogglePauseCommandId = 0x0103;
         private const int ToggleHideCommandId = 0x0104;
+        private const string SettingsCollection = "ClassroomLive";
+        private const string ToolbarShownSetting = "ToolbarShown";
 
         // 호스트가 살아 있을 때만 빠르게 돈다. 연결이 없으면 느리게 돌려서
         // Classroom Live를 안 쓰는 날에도 UI 스레드를 계속 건드리지 않게 한다.
@@ -94,6 +98,8 @@ namespace ClassroomLive.Extension
                 hideCommand = Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
             }
 
+            await ShowToolbarOnceAsync(cancellationToken);
+
             syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
 
@@ -103,6 +109,25 @@ namespace ClassroomLive.Extension
             command.BeforeQueryStatus += query;
             commands.AddCommand(command);
             return command;
+        }
+
+        private async Task ShowToolbarOnceAsync(CancellationToken cancellationToken)
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            try
+            {
+                var settings = new ShellSettingsManager(this).GetWritableSettingsStore(SettingsScope.UserSettings);
+                if (!settings.CollectionExists(SettingsCollection)) settings.CreateCollection(SettingsCollection);
+                if (settings.GetBoolean(SettingsCollection, ToolbarShownSetting, false)) return;
+
+                dynamic toolbar = dte.CommandBars["Classroom Live"];
+                toolbar.Visible = true;
+                settings.SetBoolean(SettingsCollection, ToolbarShownSetting, true);
+            }
+            catch
+            {
+                // 셸이 아직 도구 모음을 만들지 않았다면 다음 실행에서 다시 시도한다.
+            }
         }
 
         protected override void Dispose(bool disposing)
