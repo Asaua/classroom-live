@@ -580,15 +580,13 @@ button, input { font: inherit }
   .file-type { display: none }
   .professor-now { max-width: 42% }
   .professor-now strong { font-size: 10px }
-  /* 휴대폰 폭에서는 가로 스크롤 대신 항상 줄바꿈한다. */
-  .code-lines { --gutter: 46px; display: block; min-width: 0; width: 100% }
-  .code-line { grid-template-columns: var(--gutter) minmax(0, 1fr) }
-  .lc { padding: 0 14px; white-space: pre-wrap; overflow-wrap: anywhere }
+  /* 코드 영역만 가로로 스크롤하고, 줄바꿈은 사용자가 선택한다. */
+  .code-lines { --gutter: 46px }
+  .lc { padding: 0 14px }
   .ln { padding-right: 11px }
   /* 도구는 남기고 부가 정보만 접는다. */
   .status-meta { display: none }
   .statusbar { gap: 8px; padding: 0 8px }
-  #toggleWrap { display: none }
   .tool-button { padding: 0 7px }
 }
 

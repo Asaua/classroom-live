@@ -1126,10 +1126,10 @@ while with yield None True False
       .sort((a, b) => a.name.localeCompare(b.name, "ko"));
     const appendFolder = (folder, depth) => {
       // 공유 파일 없이 다음 폴더 하나로만 이어지는 중간 단계는 목록에서 생략한다.
-      // 이름만 생략하고 깊이는 보존해 실제 경로가 얼마나 들어갔는지 들여쓰기로 보여준다.
+      // 생략한 폴더는 들여쓰기에도 반영하지 않아 좁은 목록 폭을 아낀다.
       const meaningful = folder.files.length > 0 || folder.folders.size > 1;
       if (!meaningful) {
-        for (const child of sortedFolders(folder.folders)) appendFolder(child, depth + 1);
+        for (const child of sortedFolders(folder.folders)) appendFolder(child, depth);
         return;
       }
       const key = `${project.id}:${folder.path.toLocaleLowerCase()}`;
