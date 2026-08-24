@@ -94,6 +94,7 @@
   "follow.close": "안내 닫기",
   "follow.on": "교수님이 보는 {line}줄로 이동하고 계속 따라갑니다",
   "follow.off": "따라가기 끄기",
+  "follow.jump": "교수님이 보고 있는 파일로 이동",
   "font.smaller": "글자 작게",
   "font.larger": "글자 크게",
   "dialog.end.title": "수업을 종료할까요?",

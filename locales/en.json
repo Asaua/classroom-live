@@ -94,6 +94,7 @@
   "follow.close": "Close tip",
   "follow.on": "Go to line {line} and follow the professor",
   "follow.off": "Stop following",
+  "follow.jump": "Go to the file the professor is viewing",
   "font.smaller": "Smaller text",
   "font.larger": "Larger text",
   "dialog.end.title": "End class?",

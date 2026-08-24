@@ -94,6 +94,7 @@
   "follow.close": "Cerrar sugerencia",
   "follow.on": "Ir a la línea {line} y seguir al profesor",
   "follow.off": "Dejar de seguir",
+  "follow.jump": "Ir al archivo que está viendo el profesor",
   "font.smaller": "Texto más pequeño",
   "font.larger": "Texto más grande",
   "dialog.end.title": "¿Finalizar la clase?",

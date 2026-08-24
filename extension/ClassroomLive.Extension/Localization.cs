@@ -44,14 +44,16 @@ namespace ClassroomLive.Extension
             {
                 options.Add(new LocaleOption
                 {
-                    Code = "ko", Name = "한국어", Direction = "ltr",
+                    Code = "en", Name = "English", Direction = "ltr",
                     Values = new Dictionary<string, string>()
                 });
             }
 
             var saved = ReadSavedLanguage();
-            var system = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            Apply(Find(saved) != null ? saved : Find(system) != null ? system : Find("ko") != null ? "ko" : options[0].Code);
+            var system = CultureInfo.CurrentUICulture.Name;
+            var neutralSystem = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            Apply(Find(saved) != null ? saved : Find(system) != null ? system :
+                Find(neutralSystem) != null ? neutralSystem : Find("en") != null ? "en" : options[0].Code);
         }
 
         internal static bool Apply(string code)

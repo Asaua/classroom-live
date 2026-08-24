@@ -94,6 +94,7 @@
   "follow.close": "Hinweis schließen",
   "follow.on": "Zu Zeile {line} wechseln und der Lehrkraft folgen",
   "follow.off": "Nicht mehr folgen",
+  "follow.jump": "Zur Datei wechseln, die die Lehrkraft gerade ansieht",
   "font.smaller": "Kleinerer Text",
   "font.larger": "Größerer Text",
   "dialog.end.title": "Unterricht beenden?",

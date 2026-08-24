@@ -72,7 +72,10 @@
           <span class="status-meta" id="language">Text</span>
           <span class="status-meta" id="lineCount">0줄</span>
           <div class="viewer-tools">
-            <button class="tool-button" id="followProfessor" type="button" aria-pressed="false" data-i18n="action.follow" hidden>따라가기</button>
+            <span class="follow-controls" id="followControls" hidden>
+              <button id="followProfessor" type="button" aria-pressed="false" data-i18n="action.follow">따라가기</button>
+              <button class="follow-jump" id="followFile" type="button" data-i18n-title="follow.jump" data-i18n-aria="follow.jump" title="교수님이 보고 있는 파일로 이동" aria-label="교수님이 보고 있는 파일로 이동" disabled>▶▶</button>
+            </span>
             <button class="tool-button" id="copyCode" type="button" data-i18n="action.copy">복사</button>
             <button class="tool-button" id="toggleWrap" type="button" aria-pressed="false" data-i18n="action.wrap">줄바꿈</button>
             <span class="tool-group">

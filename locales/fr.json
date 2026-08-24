@@ -94,6 +94,7 @@
   "follow.close": "Fermer l’astuce",
   "follow.on": "Aller à la ligne {line} et suivre l’enseignant",
   "follow.off": "Arrêter de suivre",
+  "follow.jump": "Aller au fichier consulté par l’enseignant",
   "font.smaller": "Réduire le texte",
   "font.larger": "Agrandir le texte",
   "dialog.end.title": "Terminer le cours ?",

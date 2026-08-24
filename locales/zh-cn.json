@@ -94,6 +94,7 @@
   "follow.close": "关闭提示",
   "follow.on": "转到第 {line} 行并继续跟随教师",
   "follow.off": "停止跟随",
+  "follow.jump": "转到教师正在查看的文件",
   "font.smaller": "缩小文字",
   "font.larger": "放大文字",
   "dialog.end.title": "结束课堂？",

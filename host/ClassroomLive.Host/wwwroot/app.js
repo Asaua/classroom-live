@@ -16,9 +16,9 @@
   const adminToken = localStorage.getItem("classroom-live:admin") || "";
   const studentLanguageKey = "classroom-live:language";
   let catalog = Object.create(null);
-  let localeCode = "ko";
+  let localeCode = "en";
   let localeOptions = [];
-  let hostLanguage = "ko";
+  let hostLanguage = "en";
   let pin = sessionStorage.getItem("classroom-live:pin") || "";
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
   let selectedName = "";
@@ -90,7 +90,7 @@
   }
 
   async function loadLocale(code) {
-    const safe = localeOptions.some((item) => item.code === code) ? code : "ko";
+    const safe = localeOptions.some((item) => item.code === code) ? code : "en";
     const response = await fetch(`/locales/${encodeURIComponent(safe)}.json`, { cache: "no-store" });
     if (!response.ok) throw new Error("locale");
     catalog = await response.json();
@@ -106,7 +106,7 @@
       const response = await fetch("/api/locales", { cache: "no-store" });
       const data = await response.json();
       localeOptions = data.locales || [];
-      hostLanguage = data.language || "ko";
+      hostLanguage = data.language || "en";
       const chosen = isHost ? hostLanguage : localStorage.getItem(studentLanguageKey) || hostLanguage;
       await loadLocale(chosen);
     } catch {
@@ -227,6 +227,7 @@
       : t("notice.copyFailed"));
   });
   $("followProfessor").addEventListener("click", () => setFollowing(!following));
+  $("followFile").addEventListener("click", jumpToProfessorFile);
 
   $("toggleBroadcast").addEventListener("click", async () => {
     if (!latestHostState) return;
@@ -551,8 +552,25 @@
     following = value;
     const button = $("followProfessor");
     button.setAttribute("aria-pressed", String(following));
-    button.classList.toggle("is-active", following);
+    $("followControls").classList.toggle("is-active", following);
     followedLine = 0;
+    if (latestClassroom)
+      applyProfessorLine(latestClassroom,
+        latestClassroom.files?.find((file) => file.id === selectedId));
+  }
+
+  function jumpToProfessorFile() {
+    const classroom = latestClassroom;
+    const professor = classroom?.files?.find((file) =>
+      file.id === classroom.professorActiveId && !file.pending && !file.missing);
+    if (!classroom || !following || classroom.professorAway || !professor || professor.id === selectedId) return;
+
+    selectedId = professor.id;
+    localStorage.setItem("classroom-live:selected-file", selectedId);
+    followedLine = 0;
+    closeFiles();
+    dismissNote();
+    render(classroom, latestHostState);
   }
 
   function scrollToLine(line) {
@@ -720,7 +738,12 @@
     const line = Number(classroom.professorActiveLine) || 0;
     const anchor = Number(classroom.professorAnchorLine) || line;
     const onSameFile = Boolean(selected) && selected.id === classroom.professorActiveId;
-    const canFollow = onSameFile && line > 0 && line <= renderedRows.length;
+    const professor = classroom.files?.find((file) =>
+      file.id === classroom.professorActiveId && !file.pending && !file.missing);
+    const canFollow = !classroom.ended && !classroom.professorAway && onSameFile &&
+      line > 0 && line <= renderedRows.length;
+    const canJump = following && !classroom.ended && !classroom.professorAway &&
+      Boolean(professor) && !onSameFile;
 
     for (const row of document.querySelectorAll(".code-line.is-professor-line, .code-line.is-professor-selection"))
       row.classList.remove("is-professor-line", "is-professor-selection");
@@ -732,16 +755,18 @@
     }
     if (canFollow) renderedRows[line - 1]?.node.classList.add("is-professor-line");
 
+    const controls = $("followControls");
     const button = $("followProfessor");
-    button.hidden = !canFollow;
-    if (!canFollow) {
-      if (following) setFollowing(false);
-      return;
-    }
+    const jump = $("followFile");
+    controls.hidden = classroom.ended || (!canFollow && !following);
+    jump.disabled = !canJump;
+    setTitle(jump, t("follow.jump"));
+    jump.setAttribute("aria-label", t("follow.jump"));
+    if (controls.hidden) return;
 
     setText(button, following ? t("action.following") : t("action.follow"));
     setTitle(button, following ? t("follow.off") : t("follow.on", { line }));
-    if (following && line !== followedLine) {
+    if (following && canFollow && line !== followedLine) {
       followedLine = line;
       scrollToLine(line);
     }
@@ -1190,7 +1215,6 @@ while with yield None True False
     open.addEventListener("click", () => {
       selectedId = file.id;
       localStorage.setItem("classroom-live:selected-file", selectedId);
-      setFollowing(false);
       closeFiles();
       // 직접 골랐다는 건 안내를 이해했다는 뜻이다.
       dismissNote();

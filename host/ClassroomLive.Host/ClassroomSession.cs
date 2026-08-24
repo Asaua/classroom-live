@@ -58,18 +58,18 @@ sealed class ClassroomSession
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
     private string _visualStudioStatus = "host.vs.waiting";
     private string? _visualStudioStatusArgument;
-    private string _language = "ko";
+    private string _language = "en";
 
     public ClassroomSession() { }
 
-    internal ClassroomSession(string presetPath, string language = "ko")
+    internal ClassroomSession(string presetPath, string language = "en")
     {
         _presetPath = presetPath;
         _savedPreset = SessionPresetStore.Load(presetPath);
         _language = language;
     }
 
-    public static ClassroomSession CreatePersistent(string language = "ko") => new(SessionPresetStore.FilePath, language);
+    public static ClassroomSession CreatePersistent(string language = "en") => new(SessionPresetStore.FilePath, language);
 
     public void SetLanguage(string language)
     {

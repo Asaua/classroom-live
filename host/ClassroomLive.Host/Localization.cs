@@ -18,14 +18,17 @@ sealed class LocaleStore
         if (_locales.Count == 0) throw new InvalidOperationException("No locale catalogs were found.");
 
         var saved = ReadSavedLanguage();
-        var system = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-        _language = IsSupported(saved) ? saved! : IsSupported(system) ? system :
-            IsSupported("ko") ? "ko" : _locales.Keys.First();
+        var system = CultureInfo.CurrentUICulture.Name;
+        var neutralSystem = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        _language = SupportedCode(saved) ?? SupportedCode(system) ?? SupportedCode(neutralSystem) ??
+            SupportedCode("en") ?? _locales.Keys.First();
     }
 
     public string Language { get { lock (_gate) return _language; } }
     public LocaleInfo[] Locales => _locales.Values.OrderBy(locale => locale.Name).ToArray();
     public bool IsSupported(string? code) => !string.IsNullOrWhiteSpace(code) && _locales.ContainsKey(code);
+    private string? SupportedCode(string? code) =>
+        !string.IsNullOrWhiteSpace(code) && _locales.TryGetValue(code, out var locale) ? locale.Code : null;
 
     public bool SetLanguage(string? code)
     {

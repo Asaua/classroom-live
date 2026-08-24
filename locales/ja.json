@@ -94,6 +94,7 @@
   "follow.close": "ヒントを閉じる",
   "follow.on": "{line}行目に移動して講師への追従を続ける",
   "follow.off": "追従を停止",
+  "follow.jump": "講師が表示しているファイルに移動",
   "font.smaller": "文字を小さく",
   "font.larger": "文字を大きく",
   "dialog.end.title": "授業を終了しますか？",

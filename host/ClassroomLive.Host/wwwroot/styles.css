@@ -270,6 +270,17 @@ button, input { font: inherit }
 .tool-button.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent) }
 .tool-button.is-blocked { border-color: #4a3a3f; color: #9a8a90 }
 .tool-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
+.follow-controls {
+  min-height: 25px; display: flex; align-items: stretch;
+  border: 1px solid #2b333d; border-radius: 6px;
+  background: #161b21; color: #b7c0cc; overflow: hidden;
+}
+.follow-controls:hover { border-color: #3d4753; color: var(--text) }
+.follow-controls.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent) }
+.follow-controls button { padding: 0 9px; border: 0; background: transparent; color: inherit; font-size: 11px; white-space: nowrap; cursor: pointer }
+.follow-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+.follow-controls .follow-jump { width: 30px; padding: 0; border-left: 1px solid currentColor; font-size: 8px; letter-spacing: -2px }
+.follow-controls .follow-jump:disabled { opacity: .3; cursor: default }
 
 .file-panel { display: flex; min-height: 0; flex-direction: column }
 .panel-heading { justify-content: space-between; gap: 12px; padding: 20px; border-bottom: 1px solid var(--soft) }
