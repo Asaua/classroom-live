@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.5")]
+    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.6")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -659,6 +659,7 @@ namespace ClassroomLive.Extension
                     SolutionRoot = Path.GetDirectoryName(solutionFile),
                     Focused = IsVisualStudioForeground()
                 };
+                CaptureProject(document, update);
                 if (includeContent)
                 {
                     dynamic textDocument = document.Object("TextDocument");
@@ -695,6 +696,13 @@ namespace ClassroomLive.Extension
                 if (string.IsNullOrWhiteSpace(solutionFile) || string.IsNullOrWhiteSpace(filePath)) return null;
 
                 string content = null;
+                var update = new ExtensionUpdate
+                {
+                    Action = "refresh",
+                    FilePath = filePath,
+                    SolutionRoot = Path.GetDirectoryName(solutionFile),
+                    Focused = IsVisualStudioForeground()
+                };
                 foreach (Document document in dte.Documents)
                 {
                     if (!string.Equals(document.FullName, filePath, StringComparison.OrdinalIgnoreCase)) continue;
@@ -702,24 +710,37 @@ namespace ClassroomLive.Extension
                     if (textDocument == null) return null;
                     var editPoint = textDocument.StartPoint.CreateEditPoint();
                     content = editPoint.GetText(textDocument.EndPoint);
+                    CaptureProject(document, update);
                     break;
                 }
 
                 // 닫힌 문서는 VS에서 수정할 수 없으므로 다시 읽지 않는다. 디스크를 임의의
                 // UTF-8로 읽으면 CP949 같은 기존 소스 파일을 깨뜨릴 수 있다.
                 if (content == null) return null;
-                return new ExtensionUpdate
-                {
-                    Action = "refresh",
-                    FilePath = filePath,
-                    SolutionRoot = Path.GetDirectoryName(solutionFile),
-                    Content = content,
-                    Focused = IsVisualStudioForeground()
-                };
+                update.Content = content;
+                return update;
             }
             catch
             {
                 return null;
+            }
+        }
+
+        private static void CaptureProject(Document document, ExtensionUpdate update)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var project = document?.ProjectItem?.ContainingProject;
+                if (project == null) return;
+                update.ProjectName = project.Name;
+                update.ProjectKey = string.IsNullOrWhiteSpace(project.UniqueName)
+                    ? project.Name
+                    : project.UniqueName;
+            }
+            catch
+            {
+                // Miscellaneous Files처럼 프로젝트에 속하지 않은 문서는 기타 파일로 묶는다.
             }
         }
 
@@ -1023,6 +1044,8 @@ namespace ClassroomLive.Extension
             [DataMember] public string Action { get; set; }
             [DataMember] public string FilePath { get; set; }
             [DataMember] public string SolutionRoot { get; set; }
+            [DataMember] public string ProjectName { get; set; }
+            [DataMember] public string ProjectKey { get; set; }
             [DataMember] public string Content { get; set; }
             [DataMember] public int ActiveLine { get; set; }
             [DataMember] public int AnchorLine { get; set; }

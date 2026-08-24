@@ -20,6 +20,8 @@
   let latestHostState = null;
   let latestClassroom = null;
   const collapsedWorkspaces = loadStringSet("classroom-live:collapsed-workspaces");
+  const collapsedProjects = loadStringSet("classroom-live:collapsed-projects");
+  const collapsedFolders = loadStringSet("classroom-live:collapsed-folders");
   let requestRunning = false;
   let blockedUntil = 0;
   let shuttingDown = false;
@@ -577,7 +579,8 @@
     }
 
     applyProfessorLine(classroom, selected);
-    renderFiles(files, classroom.professorActiveId, classroom.professorWorkspaceId);
+    renderFiles(files, classroom.professorActiveId,
+      classroom.professorWorkspaceId, classroom.professorProjectId);
     if (isHost) renderHost(payload);
   }
 
@@ -786,7 +789,7 @@ while with yield None True False
 
   // 프로젝트와 파일 노드를 id 기준으로 재사용한다. 폴링할 때마다 다시 만들면
   // 접기 애니메이션과 키보드 포커스가 계속 끊긴다.
-  function renderFiles(files, professorActiveId, professorWorkspaceId) {
+  function renderFiles(files, professorActiveId, professorWorkspaceId, professorProjectId) {
     const list = $("fileList");
     const grouped = new Map();
     for (const file of files) {
@@ -804,7 +807,8 @@ while with yield None True False
       let group = leftover.get(workspace.id);
       if (group) leftover.delete(workspace.id);
       else group = createWorkspaceGroup(workspace.id);
-      updateWorkspaceGroup(group, workspace, professorActiveId, professorWorkspaceId);
+      updateWorkspaceGroup(group, workspace, professorActiveId,
+        professorWorkspaceId, professorProjectId, groups.length > 1);
       if (list.children[index] !== group) list.insertBefore(group, list.children[index] ?? null);
     });
 
@@ -846,13 +850,15 @@ while with yield None True False
     return group;
   }
 
-  function updateWorkspaceGroup(group, workspace, professorActiveId, professorWorkspaceId) {
+  function updateWorkspaceGroup(group, workspace, professorActiveId,
+    professorWorkspaceId, professorProjectId, showHeading) {
     const active = workspace.id === professorWorkspaceId;
     group.classList.toggle("is-professor-workspace", active);
+    group.classList.toggle("has-heading", showHeading);
     setText(group.parts.name, workspace.name);
     setTitle(group.parts.heading, `${workspace.name} ${collapsedWorkspaces.has(workspace.id) ? "펼치기" : "접기"}`);
-    setWorkspaceCollapsed(group, collapsedWorkspaces.has(workspace.id));
-    renderWorkspaceFiles(group.parts.items, workspace.files, professorActiveId);
+    setWorkspaceCollapsed(group, showHeading && collapsedWorkspaces.has(workspace.id));
+    renderWorkspaceProjects(group.parts.items, workspace, professorActiveId, professorProjectId);
   }
 
   function setWorkspaceCollapsed(group, collapsed) {
@@ -862,19 +868,177 @@ while with yield None True False
     group.parts.items.inert = collapsed;
   }
 
-  function renderWorkspaceFiles(container, files, professorActiveId) {
-    const leftover = new Map();
-    for (const node of Array.from(container.children)) leftover.set(node.dataset.fileId, node);
+  function renderWorkspaceProjects(container, workspace, professorActiveId, professorProjectId) {
+    const grouped = new Map();
+    for (const file of workspace.files) {
+      const loose = !file.projectId;
+      const id = file.projectId || `${workspace.id}:loose`;
+      if (!grouped.has(id)) grouped.set(id, {
+        id, name: file.projectName || "기타 파일", loose, files: []
+      });
+      grouped.get(id).files.push(file);
+    }
+    const projects = Array.from(grouped.values()).sort((a, b) =>
+      Number(a.loose) - Number(b.loose) || a.name.localeCompare(b.name, "ko"));
+    container.classList.toggle("has-multiple-projects", projects.length > 1);
 
-    files.forEach((file, index) => {
-      let item = leftover.get(file.id);
-      if (item) leftover.delete(file.id);
-      else item = createFileItem(file);
-      updateFileItem(item, file, professorActiveId);
+    const leftover = new Map();
+    for (const node of Array.from(container.children)) leftover.set(node.dataset.projectId, node);
+
+    projects.forEach((project, index) => {
+      let group = leftover.get(project.id);
+      if (group) leftover.delete(project.id);
+      else group = createProjectGroup(project.id);
+      updateProjectGroup(group, project, professorActiveId,
+        professorProjectId, projects.length > 1);
+      if (container.children[index] !== group)
+        container.insertBefore(group, container.children[index] ?? null);
+    });
+
+    for (const stale of leftover.values()) stale.remove();
+  }
+
+  function createProjectGroup(projectId) {
+    const group = document.createElement("section");
+    group.className = "project-group";
+    group.dataset.projectId = projectId;
+
+    const heading = document.createElement("button");
+    heading.type = "button";
+    heading.className = "project-heading";
+    const chevron = document.createElement("span");
+    chevron.className = "project-chevron";
+    chevron.textContent = "›";
+    chevron.setAttribute("aria-hidden", "true");
+    const name = document.createElement("strong");
+    const line = document.createElement("span");
+    line.className = "project-line";
+    line.setAttribute("aria-hidden", "true");
+    heading.append(chevron, name, line);
+
+    const body = document.createElement("div");
+    body.className = "project-body";
+    const items = document.createElement("div");
+    items.className = "project-items";
+    body.append(items);
+    group.append(heading, body);
+
+    heading.addEventListener("click", () => {
+      if (collapsedProjects.has(projectId)) collapsedProjects.delete(projectId);
+      else collapsedProjects.add(projectId);
+      saveStringSet("classroom-live:collapsed-projects", collapsedProjects);
+      setProjectCollapsed(group, collapsedProjects.has(projectId));
+    });
+    group.parts = { heading, name, items };
+    return group;
+  }
+
+  function updateProjectGroup(group, project, professorActiveId, professorProjectId, showHeading) {
+    group.classList.toggle("has-heading", showHeading);
+    group.classList.toggle("is-professor-project", project.id === professorProjectId);
+    setText(group.parts.name, project.name);
+    setTitle(group.parts.heading, `${project.name} ${collapsedProjects.has(project.id) ? "펼치기" : "접기"}`);
+    setProjectCollapsed(group, showHeading && collapsedProjects.has(project.id));
+    renderProjectFiles(group.parts.items, project, professorActiveId);
+  }
+
+  function setProjectCollapsed(group, collapsed) {
+    group.classList.toggle("is-collapsed", collapsed);
+    group.parts.heading.setAttribute("aria-expanded", String(!collapsed));
+    group.parts.items.setAttribute("aria-hidden", String(collapsed));
+    group.parts.items.inert = collapsed;
+  }
+
+  function renderProjectFiles(container, project, professorActiveId) {
+    const rows = fileTreeRows(project);
+    const leftover = new Map();
+    for (const node of Array.from(container.children)) leftover.set(node.dataset.nodeKey, node);
+
+    rows.forEach((row, index) => {
+      const nodeKey = row.type === "file" ? `file:${row.file.id}` : `folder:${row.key}`;
+      let item = leftover.get(nodeKey);
+      if (item) leftover.delete(nodeKey);
+      else item = row.type === "file" ? createFileItem(row.file) : createFolderItem(row.key);
+      item.dataset.nodeKey = nodeKey;
+      if (row.type === "file") updateFileItem(item, row.file, professorActiveId, row.depth);
+      else updateFolderItem(item, row);
       if (container.children[index] !== item) container.insertBefore(item, container.children[index] ?? null);
     });
 
     for (const stale of leftover.values()) stale.remove();
+  }
+
+  function fileTreeRows(project) {
+    const root = { folders: new Map(), files: [] };
+    for (const file of project.files) {
+      const parts = String(file.path || file.name).replaceAll("\\", "/").split("/").filter(Boolean);
+      parts.pop();
+      if (parts[0]?.localeCompare(project.name, undefined, { sensitivity: "accent" }) === 0) parts.shift();
+      let node = root;
+      parts.forEach((name, index) => {
+        if (!node.folders.has(name)) node.folders.set(name, {
+          name, path: parts.slice(0, index + 1).join("/"), folders: new Map(), files: []
+        });
+        node = node.folders.get(name);
+      });
+      node.files.push(file);
+    }
+
+    const rows = [];
+    const sortedFiles = (files) => files.slice().sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    const sortedFolders = (folders) => Array.from(folders.values())
+      .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    const appendFolder = (folder, depth) => {
+      // 공유 파일 없이 다음 폴더 하나로만 이어지는 중간 단계는 목록에서 생략한다.
+      const meaningful = folder.files.length > 0 || folder.folders.size > 1;
+      if (!meaningful) {
+        for (const child of sortedFolders(folder.folders)) appendFolder(child, depth);
+        return;
+      }
+      const key = `${project.id}:${folder.path.toLocaleLowerCase()}`;
+      rows.push({ type: "folder", key, name: folder.name, path: folder.path, depth });
+      if (collapsedFolders.has(key)) return;
+      for (const file of sortedFiles(folder.files)) rows.push({ type: "file", file, depth: depth + 1 });
+      for (const child of sortedFolders(folder.folders)) appendFolder(child, depth + 1);
+    };
+
+    for (const file of sortedFiles(root.files)) rows.push({ type: "file", file, depth: 0 });
+    for (const folder of sortedFolders(root.folders)) appendFolder(folder, 0);
+    return rows;
+  }
+
+  function createFolderItem(folderKey) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "folder-item";
+    item.dataset.folderKey = folderKey;
+    const chevron = document.createElement("span");
+    chevron.className = "folder-chevron";
+    chevron.textContent = "›";
+    chevron.setAttribute("aria-hidden", "true");
+    const name = document.createElement("strong");
+    item.append(chevron, name);
+    item.addEventListener("click", () => {
+      const key = item.dataset.folderKey;
+      if (collapsedFolders.has(key)) collapsedFolders.delete(key);
+      else collapsedFolders.add(key);
+      saveStringSet("classroom-live:collapsed-folders", collapsedFolders);
+      if (latestClassroom) renderFiles(latestClassroom.files,
+        latestClassroom.professorActiveId, latestClassroom.professorWorkspaceId,
+        latestClassroom.professorProjectId);
+    });
+    item.parts = { chevron, name };
+    return item;
+  }
+
+  function updateFolderItem(item, row) {
+    const collapsed = collapsedFolders.has(row.key);
+    item.dataset.folderKey = row.key;
+    item.style.setProperty("--tree-depth", row.depth);
+    item.classList.toggle("is-collapsed", collapsed);
+    item.setAttribute("aria-expanded", String(!collapsed));
+    setText(item.parts.name, row.name);
+    setTitle(item, `${row.path} ${collapsed ? "펼치기" : "접기"}`);
   }
 
   function createFileItem(file) {
@@ -940,12 +1104,13 @@ while with yield None True False
     return item;
   }
 
-  function updateFileItem(item, file, professorActiveId) {
+  function updateFileItem(item, file, professorActiveId, depth = 0) {
     const { open, icon, name, updated, badge, remove, hide } = item.parts;
     const isSelected = file.id === selectedId;
 
     const className = `file-item${isSelected ? " is-selected" : ""}${file.hidden ? " is-hidden-file" : ""}${file.pending ? " is-pending-file" : ""}${file.missing ? " is-missing-file" : ""}`;
     if (item.className !== className) item.className = className;
+    item.style.setProperty("--tree-depth", depth);
     if (isSelected) open.setAttribute("aria-current", "page");
     else open.removeAttribute("aria-current");
 

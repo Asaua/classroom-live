@@ -472,4 +472,8 @@ record ExtensionUpdateRequest(
     /// <summary>선택을 시작한 줄. 선택이 없거나 확장이 모르면 0.</summary>
     int AnchorLine = 0,
     /// <summary>이 Visual Studio 프로세스가 현재 전경 창인지.</summary>
-    bool Focused = false);
+    bool Focused = false,
+    /// <summary>Visual Studio가 알려준 프로젝트 표시 이름.</summary>
+    string? ProjectName = null,
+    /// <summary>같은 솔루션 안에서 프로젝트를 구분하는 Visual Studio 고유 이름.</summary>
+    string? ProjectKey = null);

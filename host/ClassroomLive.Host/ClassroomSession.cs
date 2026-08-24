@@ -26,6 +26,7 @@ sealed class ClassroomSession
     private string? _professorActiveId;
     private string? _professorActiveName;
     private string? _professorWorkspaceId;
+    private string? _professorProjectId;
     private int? _professorActiveLine;
     private int? _professorAnchorLine;
     private string? _currentFileName;
@@ -207,6 +208,9 @@ sealed class ClassroomSession
             var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) && blockReason is null;
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             var activeWorkspaceId = hasSafeActiveFile ? FileId(request.SolutionRoot!) : null;
+            var activeProjectId = hasSafeActiveFile
+                ? ProjectId(activeWorkspaceId!, request.ProjectKey, request.ProjectName)
+                : null;
             var contentWarning = hasSafeActiveFile && request.Content is not null
                 ? SecurityRules.ContentWarning(request.Content)
                 : null;
@@ -277,6 +281,7 @@ sealed class ClassroomSession
                 _professorActiveName = hasSafeActiveFile ? Path.GetFileName(request.FilePath) : null;
                 _professorActiveId = activeId is not null && _files.ContainsKey(activeId) ? activeId : null;
                 _professorWorkspaceId = activeWorkspaceId;
+                _professorProjectId = activeProjectId;
                 _professorActiveLine = _professorActiveId is null ? null : activeLine;
                 _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
                 _visualStudioStatus = _professorActiveName is null
@@ -314,13 +319,15 @@ sealed class ClassroomSession
             }
 
             var wasReady = activeId is not null && _files.TryGetValue(activeId, out var before) && !before.Pending;
-            UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!);
+            UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!,
+                request.ProjectName, request.ProjectKey);
             if (action == "share" || (_everStarted && !wasReady)) PresetChanged();
             if (_broadcasting && action != "refresh")
             {
                 _professorActiveName = Path.GetFileName(request.FilePath);
                 _professorActiveId = _files.ContainsKey(activeId!) ? activeId : null;
                 _professorWorkspaceId = activeWorkspaceId;
+                _professorProjectId = activeProjectId;
                 _professorActiveLine = _professorActiveId is null ? null : activeLine;
                 _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
             }
@@ -339,11 +346,13 @@ sealed class ClassroomSession
         _professorActiveId = null;
         _professorActiveName = null;
         _professorWorkspaceId = null;
+        _professorProjectId = null;
         _professorActiveLine = null;
         _professorAnchorLine = null;
     }
 
-    private void UpdateSharedFile(string fullPath, string content, string solutionRoot)
+    private void UpdateSharedFile(string fullPath, string content, string solutionRoot,
+        string? projectName, string? projectKey)
     {
         if (!SecurityRules.IsShareable(fullPath, solutionRoot, content)) return;
 
@@ -352,12 +361,16 @@ sealed class ClassroomSession
         var id = FileId(normalizedPath);
         var workspaceId = FileId(normalizedRoot);
         var workspaceName = Path.GetFileName(Path.TrimEndingDirectorySeparator(normalizedRoot));
+        projectName = string.IsNullOrWhiteSpace(projectName) ? null : projectName.Trim();
+        projectKey = string.IsNullOrWhiteSpace(projectKey) ? projectName : projectKey.Trim();
+        var projectId = ProjectId(workspaceId, projectKey, projectName);
         var relativePath = Path.GetRelativePath(solutionRoot, normalizedPath).Replace('\\', '/');
         var now = DateTimeOffset.Now;
 
         if (_files.TryGetValue(id, out var existing))
         {
-            if (!string.Equals(existing.Content, content, StringComparison.Ordinal) || existing.Pending)
+            if (!string.Equals(existing.Content, content, StringComparison.Ordinal) || existing.Pending ||
+                existing.ProjectId != projectId || existing.ProjectName != projectName)
                 _files[id] = existing with
                 {
                     Content = content,
@@ -365,7 +378,10 @@ sealed class ClassroomSession
                     Pending = false,
                     Missing = false,
                     FullPath = normalizedPath,
-                    SolutionRoot = normalizedRoot
+                    SolutionRoot = normalizedRoot,
+                    ProjectId = projectId,
+                    ProjectName = projectName,
+                    ProjectKey = projectKey
                 };
         }
         else
@@ -373,6 +389,7 @@ sealed class ClassroomSession
             _files[id] = new SharedFile(id, Path.GetFileName(normalizedPath), relativePath,
                 SecurityRules.LanguageFor(normalizedPath), now, content, Hidden: false,
                 workspaceId, string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
+                projectId, projectName, projectKey,
                 normalizedPath, normalizedRoot, Pending: false, Missing: false);
         }
 
@@ -569,10 +586,14 @@ sealed class ClassroomSession
             var root = Path.GetFullPath(entry.SolutionRoot);
             if (SecurityRules.BlockReason(fullPath, root, null) is not null) return null;
             var workspaceName = Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
+            var workspaceId = FileId(root);
+            var projectName = string.IsNullOrWhiteSpace(entry.ProjectName) ? null : entry.ProjectName.Trim();
+            var projectKey = string.IsNullOrWhiteSpace(entry.ProjectKey) ? projectName : entry.ProjectKey.Trim();
             return new SharedFile(FileId(fullPath), Path.GetFileName(fullPath),
                 Path.GetRelativePath(root, fullPath).Replace('\\', '/'), SecurityRules.LanguageFor(fullPath),
-                DateTimeOffset.Now, "", entry.Hidden, FileId(root),
+                DateTimeOffset.Now, "", entry.Hidden, workspaceId,
                 string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
+                ProjectId(workspaceId, projectKey, projectName), projectName, projectKey,
                 fullPath, root, Pending: true, Missing: !File.Exists(fullPath));
         }
         catch { return null; }
@@ -588,7 +609,8 @@ sealed class ClassroomSession
     {
         if (_presetPath is null) return;
         var preset = _files.Values.Where(file => !file.Missing)
-            .Select(file => new PresetEntry(file.FullPath, file.SolutionRoot, file.Hidden))
+            .Select(file => new PresetEntry(file.FullPath, file.SolutionRoot, file.Hidden,
+                file.ProjectName, file.ProjectKey))
             .DistinctBy(entry => entry.FilePath, StringComparer.OrdinalIgnoreCase)
             .Take(40)
             .ToArray();
@@ -632,6 +654,8 @@ sealed class ClassroomSession
             files.Any(file => file.Id == _professorActiveId);
         var workspaceIsVisible = _professorWorkspaceId is not null &&
             files.Any(file => file.WorkspaceId == _professorWorkspaceId);
+        var projectIsVisible = _professorProjectId is not null &&
+            files.Any(file => file.ProjectId == _professorProjectId);
         var professorAway = _professorActiveName is not null && !activeIsVisible;
 
         return new ClassroomSnapshot(
@@ -642,6 +666,7 @@ sealed class ClassroomSession
             activeIsVisible ? _professorAnchorLine : null,
             professorAway,
             workspaceIsVisible ? _professorWorkspaceId : null,
+            projectIsVisible ? _professorProjectId : null,
             _viewers.Count,
             _broadcasting,
             _everStarted,
@@ -672,8 +697,17 @@ sealed class ClassroomSession
     private static string FileId(string path)
     {
         var normalizedPath = Path.GetFullPath(path).ToLowerInvariant();
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath)))[..16];
+        return HashId(normalizedPath);
     }
+
+    private static string? ProjectId(string workspaceId, string? projectKey, string? projectName)
+    {
+        var key = string.IsNullOrWhiteSpace(projectKey) ? projectName : projectKey;
+        return string.IsNullOrWhiteSpace(key) ? null : HashId($"{workspaceId}\0{key.Trim().ToLowerInvariant()}");
+    }
+
+    private static string HashId(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..16];
 }
 
 /// <summary>
@@ -742,6 +776,9 @@ sealed record SharedFile(
     bool Hidden,
     string WorkspaceId,
     string WorkspaceName,
+    string? ProjectId,
+    string? ProjectName,
+    [property: JsonIgnore] string? ProjectKey,
     [property: JsonIgnore] string FullPath,
     [property: JsonIgnore] string SolutionRoot,
     bool Pending,
@@ -755,6 +792,7 @@ sealed record ClassroomSnapshot(
     int? ProfessorAnchorLine,
     bool ProfessorAway,
     string? ProfessorWorkspaceId,
+    string? ProfessorProjectId,
     int Viewers,
     bool Broadcasting,
     bool EverStarted,
@@ -781,7 +819,12 @@ sealed record HostSnapshot(
     string Pin,
     string[] StudentUrls);
 
-sealed record PresetEntry(string FilePath, string SolutionRoot, bool Hidden);
+sealed record PresetEntry(
+    string FilePath,
+    string SolutionRoot,
+    bool Hidden,
+    string? ProjectName = null,
+    string? ProjectKey = null);
 
 static class SessionPresetStore
 {
@@ -1056,14 +1099,16 @@ static class SecurityRules
         try
         {
             var session = new ClassroomSession(presetPath);
-            session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Main {}", 1));
+            session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Main {}", 1,
+                ProjectName: "Example", ProjectKey: "Example/Example.csproj"));
             var id = session.GetHostSnapshot([]).Classroom.Files.Single().Id;
             session.SetHidden(id, true);
             Assert(!File.Exists(presetPath), "시작 전 준비 목록은 이전 저장본을 덮어쓰지 않는다");
 
             session.SetBroadcasting(true);
             var saved = SessionPresetStore.Load(presetPath);
-            Assert(saved.Length == 1 && saved[0].Hidden, "시작한 준비 목록의 공유·숨김 상태를 저장한다");
+            Assert(saved.Length == 1 && saved[0].Hidden && saved[0].ProjectName == "Example",
+                "시작한 준비 목록의 공유·숨김·프로젝트 상태를 저장한다");
 
             var skipped = new ClassroomSession(presetPath);
             Assert(skipped.GetHostSnapshot([]).RestoreAvailable, "직전 목록이 있으면 복원을 제안한다");
@@ -1076,7 +1121,8 @@ static class SecurityRules
                 "건너뛰고 시작하지 않은 채 종료해도 저장본은 남는다");
             Assert(reopened.DecideRestore(true), "직전 목록을 준비 화면에 불러온다");
             var prepared = reopened.GetHostSnapshot([]).Classroom.Files.Single();
-            Assert(prepared.Pending && prepared.Hidden, "내용 없이 공유·숨김 준비 상태만 복원한다");
+            Assert(prepared.Pending && prepared.Hidden && prepared.ProjectName == "Example",
+                "내용 없이 공유·숨김·프로젝트 준비 상태만 복원한다");
             Assert(reopened.GetSnapshot().Files.Length == 0, "시작 전 준비 목록은 학생에게 보내지 않는다");
             var restoreReply = reopened.BuildReply("window", file, root);
             Assert(restoreReply.RestoreFiles.Length == 1 && restoreReply.RestoreFiles[0].Hidden,
@@ -1108,7 +1154,8 @@ static class SecurityRules
         var root = Path.Combine(Path.GetTempPath(), "ClassroomLiveTest", "Solution");
         var file = Path.Combine(root, "Scripts", "Player.cs");
         ExtensionUpdateRequest Sync(string content, int line) =>
-            new("sync", file, root, content, line);
+            new("sync", file, root, content, line,
+                ProjectName: "Assembly-CSharp", ProjectKey: "Assembly-CSharp.csproj");
 
         var session = new ClassroomSession();
         session.ApplyExtensionUpdate(Sync("class Player {}", 1));
@@ -1117,7 +1164,8 @@ static class SecurityRules
             "방송 전 상태를 일시정지라고 표시하지 않는다");
         Assert(waitingHost.CurrentFileDisplayPath == "Solution/Scripts/Player.cs",
             "현재 파일을 솔루션 기준 경로로 표시한다");
-        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1));
+        session.ApplyExtensionUpdate(new ExtensionUpdateRequest("share", file, root, "class Player {}", 1,
+            ProjectName: "Assembly-CSharp", ProjectKey: "Assembly-CSharp.csproj"));
         Assert(session.GetSnapshot().Files.Length == 0, "시작 전에는 파일을 공유하지 않는다");
 
         var privateSession = new ClassroomSession();
@@ -1133,7 +1181,8 @@ static class SecurityRules
 
         session.SetBroadcasting(true);
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
-            "share", file, root, "class Player {}", 3, AnchorLine: 1));
+            "share", file, root, "class Player {}", 3, AnchorLine: 1,
+            ProjectName: "Assembly-CSharp", ProjectKey: "Assembly-CSharp.csproj"));
 
         var live = session.GetSnapshot();
         Assert(live.Files.Length == 1, "실시간일 때 학생이 파일을 본다");
@@ -1142,17 +1191,23 @@ static class SecurityRules
             "공유 파일에 프로젝트 구분 정보를 붙인다");
         Assert(live.ProfessorWorkspaceId == live.Files[0].WorkspaceId,
             "교수가 보고 있는 프로젝트를 표시한다");
+        Assert(live.Files[0].ProjectName == "Assembly-CSharp" &&
+               live.ProfessorProjectId == live.Files[0].ProjectId,
+            "Visual Studio 프로젝트와 교수 위치를 함께 표시한다");
         Assert(live.ProfessorActiveLine == 3, "교수가 보는 줄이 전달된다");
         Assert(live.ProfessorAnchorLine == 1, "교수가 선택을 시작한 줄도 전달된다");
 
         // 같은 프로젝트의 미공유 파일은 파일명을 숨기되 프로젝트 위치만 알려준다.
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
-            "heartbeat", Path.Combine(root, "Scripts", "Private.cs"), root, null, 1));
+            "heartbeat", Path.Combine(root, "Scripts", "Private.cs"), root, null, 1,
+            ProjectName: "Assembly-CSharp", ProjectKey: "Assembly-CSharp.csproj"));
         var sameWorkspace = session.GetSnapshot();
         Assert(sameWorkspace.ProfessorAway && sameWorkspace.ProfessorActiveName is null,
             "미공유 파일 이름은 계속 숨긴다");
         Assert(sameWorkspace.ProfessorWorkspaceId == live.Files[0].WorkspaceId,
             "이미 공개된 프로젝트 안에서는 교수 위치만 표시한다");
+        Assert(sameWorkspace.ProfessorProjectId == live.Files[0].ProjectId,
+            "미공유 파일도 같은 Visual Studio 프로젝트 위치는 표시한다");
 
         // 공유 파일이 전혀 없는 다른 프로젝트 이름은 학생에게 새로 노출하지 않는다.
         var privateRoot = Path.Combine(Path.GetTempPath(), "ClassroomLiveTest", "PrivateSolution");
