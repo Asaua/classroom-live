@@ -34,7 +34,7 @@
   "host.copyAddress": "Copy address",
   "host.copyAddress.title": "Copy the address to share with students",
   "host.copyPin.title": "Click to copy the PIN",
-  "host.firewall": "Allow through firewall",
+  "host.firewall": "Allow firewall",
   "host.firewall.title": "Allow students on the same Wi-Fi to connect",
   "host.firewall.requesting": "Requesting",
   "host.firewall.allowed": "Allowed",
