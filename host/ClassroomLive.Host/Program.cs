@@ -148,6 +148,26 @@ app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
     return Results.Json(session.GetSnapshot());
 }).RequireRateLimiting("student-state");
 
+// 백그라운드 탭에서는 setInterval이 크게 늦어질 수 있다. 이 요청을 서버가 잡아 두었다가
+// 정상 종료 순간에 깨워 주면 5초 유예 안에 종료 상태를 확실히 전달할 수 있다.
+app.MapGet("/api/end", async (HttpContext context, ClassroomSession session) =>
+{
+    var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    if (session.IsPinRateLimited(address))
+        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+
+    var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
+    if (!session.IsValidPin(pin))
+    {
+        session.RecordPinFailure(address);
+        return Results.Unauthorized();
+    }
+
+    session.ClearPinFailures(address);
+    await session.WaitForEndAsync(context.RequestAborted);
+    return Results.Json(session.GetSnapshot());
+}).RequireRateLimiting("student-state");
+
 app.MapPost("/api/viewer/leave", (HttpContext context, ClassroomSession session) =>
 {
     var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
@@ -163,6 +183,15 @@ app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
         return Results.Unauthorized();
 
     session.RecordHostPoll();
+    return Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)));
+});
+
+app.MapGet("/api/host/end", async (HttpContext context, ClassroomSession session) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    await session.WaitForEndAsync(context.RequestAborted);
     return Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)));
 });
 

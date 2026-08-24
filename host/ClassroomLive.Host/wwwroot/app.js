@@ -28,6 +28,7 @@
   const collapsedProjects = loadStringSet("classroom-live:collapsed-projects");
   const collapsedFolders = loadStringSet("classroom-live:collapsed-folders");
   let requestRunning = false;
+  let endListenerRunning = false;
   let blockedUntil = 0;
   let shuttingDown = false;
   let currentSessionState = "connecting";
@@ -600,10 +601,38 @@
         await loadLocale(hostLanguage);
       $("gate").hidden = true;
       render(classroom, payload);
+      void listenForEnd();
     } catch {
       setSessionState("disconnected");
     } finally {
       requestRunning = false;
+    }
+  }
+
+  async function listenForEnd() {
+    if (endListenerRunning || shuttingDown || (!isHost && !pin)) return;
+
+    const listenerPin = pin;
+    endListenerRunning = true;
+    try {
+      const response = await fetch(isHost ? "/api/host/end" : "/api/end", {
+        cache: "no-store",
+        headers: isHost
+          ? { "X-Admin-Token": adminToken }
+          : { "X-Classroom-Pin": listenerPin },
+      });
+      if (!response.ok) return;
+
+      const payload = await response.json();
+      const classroom = isHost ? payload.classroom : payload;
+      if (!classroom?.ended) return;
+      latestHostState = isHost ? payload : null;
+      latestClassroom = classroom;
+      render(classroom, payload);
+    } catch {
+      // 비정상 종료나 네트워크 단절은 기존 짧은 상태 요청이 "끊김"으로 판정한다.
+    } finally {
+      endListenerRunning = false;
     }
   }
 
@@ -958,7 +987,8 @@ while with yield None True False
     setText(group.parts.name, workspace.name);
     setTitle(group.parts.heading, t(collapsedWorkspaces.has(workspace.id) ? "file.expand" : "file.collapse", { name: workspace.name }));
     setWorkspaceCollapsed(group, showHeading && collapsedWorkspaces.has(workspace.id));
-    renderWorkspaceProjects(group.parts.items, workspace, professorActiveId, professorProjectId);
+    renderWorkspaceProjects(group.parts.items, workspace, professorActiveId, professorProjectId,
+      showHeading ? 1 : 0);
   }
 
   function setWorkspaceCollapsed(group, collapsed) {
@@ -968,7 +998,7 @@ while with yield None True False
     group.parts.items.inert = collapsed;
   }
 
-  function renderWorkspaceProjects(container, workspace, professorActiveId, professorProjectId) {
+  function renderWorkspaceProjects(container, workspace, professorActiveId, professorProjectId, baseDepth) {
     const grouped = new Map();
     for (const file of workspace.files) {
       const loose = !file.projectId;
@@ -990,7 +1020,7 @@ while with yield None True False
       if (group) leftover.delete(project.id);
       else group = createProjectGroup(project.id);
       updateProjectGroup(group, project, professorActiveId,
-        professorProjectId, projects.length > 1);
+        professorProjectId, projects.length > 1, baseDepth);
       if (container.children[index] !== group)
         container.insertBefore(group, container.children[index] ?? null);
     });
@@ -1033,13 +1063,15 @@ while with yield None True False
     return group;
   }
 
-  function updateProjectGroup(group, project, professorActiveId, professorProjectId, showHeading) {
+  function updateProjectGroup(group, project, professorActiveId, professorProjectId, showHeading, baseDepth) {
     group.classList.toggle("has-heading", showHeading);
     group.classList.toggle("is-professor-project", project.id === professorProjectId);
+    group.parts.heading.style.setProperty("--tree-depth", baseDepth);
     setText(group.parts.name, project.name);
     setTitle(group.parts.heading, t(collapsedProjects.has(project.id) ? "file.expand" : "file.collapse", { name: project.name }));
     setProjectCollapsed(group, showHeading && collapsedProjects.has(project.id));
-    renderProjectFiles(group.parts.items, project, professorActiveId);
+    renderProjectFiles(group.parts.items, project, professorActiveId,
+      baseDepth + (showHeading ? 1 : 0));
   }
 
   function setProjectCollapsed(group, collapsed) {
@@ -1049,7 +1081,7 @@ while with yield None True False
     group.parts.items.inert = collapsed;
   }
 
-  function renderProjectFiles(container, project, professorActiveId) {
+  function renderProjectFiles(container, project, professorActiveId, baseDepth) {
     const rows = fileTreeRows(project);
     const leftover = new Map();
     for (const node of Array.from(container.children)) leftover.set(node.dataset.nodeKey, node);
@@ -1060,8 +1092,8 @@ while with yield None True False
       if (item) leftover.delete(nodeKey);
       else item = row.type === "file" ? createFileItem(row.file) : createFolderItem(row.key);
       item.dataset.nodeKey = nodeKey;
-      if (row.type === "file") updateFileItem(item, row.file, professorActiveId, row.depth);
-      else updateFolderItem(item, row);
+      if (row.type === "file") updateFileItem(item, row.file, professorActiveId, row.depth + baseDepth);
+      else updateFolderItem(item, { ...row, depth: row.depth + baseDepth });
       if (container.children[index] !== item) container.insertBefore(item, container.children[index] ?? null);
     });
 
@@ -1073,7 +1105,11 @@ while with yield None True False
     for (const file of project.files) {
       const parts = String(file.path || file.name).replaceAll("\\", "/").split("/").filter(Boolean);
       parts.pop();
-      if (parts[0]?.localeCompare(project.name, undefined, { sensitivity: "accent" }) === 0) parts.shift();
+      // 솔루션 루트와 프로젝트 폴더 사이에 src 같은 중간 폴더가 있어도
+      // 프로젝트 제목 아래에 같은 프로젝트명이 폴더로 다시 나타나지 않게 한다.
+      const projectRoot = parts.findIndex((part) =>
+        part.localeCompare(project.name, undefined, { sensitivity: "accent" }) === 0);
+      if (!project.loose && projectRoot >= 0) parts.splice(0, projectRoot + 1);
       let node = root;
       parts.forEach((name, index) => {
         if (!node.folders.has(name)) node.folders.set(name, {
@@ -1090,9 +1126,10 @@ while with yield None True False
       .sort((a, b) => a.name.localeCompare(b.name, "ko"));
     const appendFolder = (folder, depth) => {
       // 공유 파일 없이 다음 폴더 하나로만 이어지는 중간 단계는 목록에서 생략한다.
+      // 이름만 생략하고 깊이는 보존해 실제 경로가 얼마나 들어갔는지 들여쓰기로 보여준다.
       const meaningful = folder.files.length > 0 || folder.folders.size > 1;
       if (!meaningful) {
-        for (const child of sortedFolders(folder.folders)) appendFolder(child, depth);
+        for (const child of sortedFolders(folder.folders)) appendFolder(child, depth + 1);
         return;
       }
       const key = `${project.id}:${folder.path.toLocaleLowerCase()}`;

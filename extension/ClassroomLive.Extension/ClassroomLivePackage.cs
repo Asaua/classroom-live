@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "Share the current file with your class.", "1.3.0")]
+    [InstalledProductRegistration("Classroom Live", "Share the current file with your class.", "1.3.1")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.

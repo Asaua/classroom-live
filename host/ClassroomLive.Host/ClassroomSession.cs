@@ -21,6 +21,8 @@ sealed class ClassroomSession
     // 내용 경고를 교수가 한 번 승인한 파일. 서버를 다시 켜면 승인은 사라진다.
     private readonly HashSet<string> _approvedSensitiveFiles = [];
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
+    private readonly TaskCompletionSource<bool> _endedSignal =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string? _presetPath;
     private PresetEntry[] _savedPreset = [];
     private string? _professorActiveId;
@@ -171,8 +173,18 @@ sealed class ClassroomSession
     {
         lock (_gate)
         {
+            if (_ended) return;
             _ended = true;
             _broadcasting = false;
+            _endedSignal.TrySetResult(true);
+        }
+    }
+
+    public Task WaitForEndAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return _ended ? Task.CompletedTask : _endedSignal.Task.WaitAsync(cancellationToken);
         }
     }
 
@@ -216,8 +228,9 @@ sealed class ClassroomSession
             var hasSafeActiveFile = !string.IsNullOrWhiteSpace(request.FilePath) && blockReason is null;
             var activeId = hasSafeActiveFile ? FileId(request.FilePath!) : null;
             var activeWorkspaceId = hasSafeActiveFile ? FileId(request.SolutionRoot!) : null;
+            var project = NormalizeProject(request.SolutionRoot, request.ProjectName, request.ProjectKey);
             var activeProjectId = hasSafeActiveFile
-                ? ProjectId(activeWorkspaceId!, request.ProjectKey, request.ProjectName)
+                ? ProjectId(activeWorkspaceId!, project.Key, project.Name)
                 : null;
             var contentWarning = hasSafeActiveFile && request.Content is not null
                 ? SecurityRules.ContentWarning(request.Content)
@@ -331,7 +344,7 @@ sealed class ClassroomSession
 
             var wasReady = activeId is not null && _files.TryGetValue(activeId, out var before) && !before.Pending;
             UpdateSharedFile(request.FilePath!, request.Content, request.SolutionRoot!,
-                request.ProjectName, request.ProjectKey);
+                project.Name, project.Key);
             if (action == "share" || (_everStarted && !wasReady)) PresetChanged();
             if (_broadcasting && action != "refresh")
             {
@@ -372,8 +385,7 @@ sealed class ClassroomSession
         var id = FileId(normalizedPath);
         var workspaceId = FileId(normalizedRoot);
         var workspaceName = Path.GetFileName(Path.TrimEndingDirectorySeparator(normalizedRoot));
-        projectName = string.IsNullOrWhiteSpace(projectName) ? null : projectName.Trim();
-        projectKey = string.IsNullOrWhiteSpace(projectKey) ? projectName : projectKey.Trim();
+        (projectName, projectKey) = NormalizeProject(normalizedRoot, projectName, projectKey);
         var projectId = ProjectId(workspaceId, projectKey, projectName);
         var relativePath = Path.GetRelativePath(solutionRoot, normalizedPath).Replace('\\', '/');
         var now = DateTimeOffset.Now;
@@ -600,8 +612,7 @@ sealed class ClassroomSession
             if (SecurityRules.BlockReason(fullPath, root, null) is not null) return null;
             var workspaceName = Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
             var workspaceId = FileId(root);
-            var projectName = string.IsNullOrWhiteSpace(entry.ProjectName) ? null : entry.ProjectName.Trim();
-            var projectKey = string.IsNullOrWhiteSpace(entry.ProjectKey) ? projectName : entry.ProjectKey.Trim();
+            var (projectName, projectKey) = NormalizeProject(root, entry.ProjectName, entry.ProjectKey);
             return new SharedFile(FileId(fullPath), Path.GetFileName(fullPath),
                 Path.GetRelativePath(root, fullPath).Replace('\\', '/'), SecurityRules.LanguageFor(fullPath),
                 DateTimeOffset.Now, "", entry.Hidden, workspaceId,
@@ -718,6 +729,32 @@ sealed class ClassroomSession
     {
         var key = string.IsNullOrWhiteSpace(projectKey) ? projectName : projectKey;
         return string.IsNullOrWhiteSpace(key) ? null : HashId($"{workspaceId}\0{key.Trim().ToLowerInvariant()}");
+    }
+
+    private static (string? Name, string? Key) NormalizeProject(
+        string? solutionRoot, string? projectName, string? projectKey)
+    {
+        var name = string.IsNullOrWhiteSpace(projectName) ? null : projectName.Trim();
+        var key = string.IsNullOrWhiteSpace(projectKey) ? name : projectKey.Trim();
+        if (name is null || string.IsNullOrWhiteSpace(solutionRoot)) return (name, key);
+
+        // Unity가 Visual Studio 연동용으로 자동 생성하는 기본 프로젝트는 수업 자료의
+        // 실제 구분이 아니다. Unity 루트가 확실할 때만 없애고, asmdef로 만든 이름은 남긴다.
+        var generated = name.Equals("Assembly-CSharp", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("Assembly-CSharp-Editor", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("Assembly-CSharp-firstpass", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("Assembly-CSharp-Editor-firstpass", StringComparison.OrdinalIgnoreCase);
+        if (!generated) return (name, key);
+
+        try
+        {
+            var root = Path.GetFullPath(solutionRoot);
+            return Directory.Exists(Path.Combine(root, "Assets")) &&
+                   Directory.Exists(Path.Combine(root, "ProjectSettings"))
+                ? (null, null)
+                : (name, key);
+        }
+        catch { return (name, key); }
     }
 
     private static string HashId(string value) =>
@@ -1214,6 +1251,39 @@ static class SecurityRules
         Assert(live.ProfessorActiveLine == 3, "교수가 보는 줄이 전달된다");
         Assert(live.ProfessorAnchorLine == 1, "교수가 선택을 시작한 줄도 전달된다");
 
+        var unityRoot = Path.Combine(Path.GetTempPath(), "ClassroomLiveTest", Guid.NewGuid().ToString("N"), "UnityGame");
+        try
+        {
+            var unityFile = Path.Combine(unityRoot, "Assets", "Scripts", "Player.cs");
+            var customFile = Path.Combine(unityRoot, "Assets", "Editor", "BuildTool.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(unityFile)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(customFile)!);
+            Directory.CreateDirectory(Path.Combine(unityRoot, "ProjectSettings"));
+            File.WriteAllText(unityFile, "class Player {}");
+            File.WriteAllText(customFile, "class BuildTool {}");
+
+            var unity = new ClassroomSession();
+            unity.SetBroadcasting(true);
+            unity.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+                "share", unityFile, unityRoot, "class Player {}", 1,
+                ProjectName: "Assembly-CSharp", ProjectKey: "Assembly-CSharp.csproj"));
+            var defaultAssembly = unity.GetSnapshot().Files.Single();
+            Assert(defaultAssembly.ProjectName is null && defaultAssembly.ProjectId is null,
+                "Unity 자동 생성 Assembly-CSharp 그룹은 표시하지 않는다");
+
+            unity.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+                "share", customFile, unityRoot, "class BuildTool {}", 1,
+                ProjectName: "Lecture.Editor", ProjectKey: "Lecture.Editor.csproj"));
+            var customAssembly = unity.GetSnapshot().Files.Single(file => file.Name == "BuildTool.cs");
+            Assert(customAssembly.ProjectName == "Lecture.Editor" && customAssembly.ProjectId is not null,
+                "Unity asmdef 사용자 프로젝트 이름은 유지한다");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(unityRoot)!, recursive: true); }
+            catch { }
+        }
+
         // 같은 프로젝트의 미공유 파일은 파일명을 숨기되 프로젝트 위치만 알려준다.
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
             "heartbeat", Path.Combine(root, "Scripts", "Private.cs"), root, null, 1,
@@ -1271,7 +1341,10 @@ static class SecurityRules
 
         var endedSession = new ClassroomSession();
         endedSession.SetBroadcasting(true);
+        var endWait = endedSession.WaitForEndAsync(CancellationToken.None);
+        Assert(!endWait.IsCompleted, "종료 대기는 세션이 끝날 때까지 열린다");
         endedSession.End();
+        Assert(endWait.Wait(TimeSpan.FromSeconds(1)), "종료 시 대기 중인 웹 요청을 즉시 깨운다");
         endedSession.SetBroadcasting(true);
         var ended = endedSession.GetSnapshot();
         Assert(ended.Ended, "정상 종료 상태가 학생에게 전달된다");
