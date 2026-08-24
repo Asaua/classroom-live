@@ -1,7 +1,6 @@
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell.Settings;
-using EnvDTE;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Design;
@@ -491,6 +490,7 @@ namespace ClassroomLive.Extension
 
         private void ApplyReply(PostResult result, string path = null)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             var oldReachable = hostReachable;
             var oldBroadcasting = broadcasting;
             var oldEverStarted = everStarted;
@@ -721,7 +721,7 @@ namespace ClassroomLive.Extension
                     SolutionRoot = Path.GetDirectoryName(solutionFile),
                     Focused = IsVisualStudioForeground()
                 };
-                foreach (Document document in dte.Documents)
+                foreach (dynamic document in dte.Documents)
                 {
                     if (!string.Equals(document.FullName, filePath, StringComparison.OrdinalIgnoreCase)) continue;
                     dynamic textDocument = document.Object("TextDocument");
@@ -744,7 +744,7 @@ namespace ClassroomLive.Extension
             }
         }
 
-        private static void CaptureProject(Document document, ExtensionUpdate update)
+        private static void CaptureProject(dynamic document, ExtensionUpdate update)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             try

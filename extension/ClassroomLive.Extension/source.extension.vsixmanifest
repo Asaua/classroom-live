@@ -4,6 +4,7 @@
     <Identity Id="ClassroomLive.Extension.520905BF-FE2D-4FC7-A9E1-E94F533C3039" Version="1.3.1" Language="en-US" Publisher="Asau" />
     <DisplayName>Classroom Live</DisplayName>
     <Description xml:space="preserve">Share the current Visual Studio file with a Classroom Live session.</Description>
+    <License>Resources\LICENSE.txt</License>
     <Icon>Resources\ClassroomLiveIcon.png</Icon>
     <Tags>classroom, live, code, teaching</Tags>
   </Metadata>

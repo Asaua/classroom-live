@@ -4,7 +4,9 @@ Classroom Live 사용법
 지원 환경
 ---------
 
-- Windows 10/11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
+- Windows 11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
+- Windows 10 x64는 일반 소비자용 운영체제와 .NET 10의 공식 지원이 끝났으므로
+  최선 지원(best effort)으로 제공합니다.
 - macOS, Linux, Windows ARM64, Visual Studio Code는 지원하지 않습니다.
 - VSIX에 Windows x64용 호스트 런타임이 포함되므로 .NET을 따로 설치할 필요가 없습니다.
 
@@ -133,3 +135,9 @@ Visual Studio가 연결되지 않을 때
 
 - 통신은 암호화되지 않습니다. 같은 와이파이에서 트래픽을 들여다볼 수 있는 사람은
   공유 중인 코드를 볼 수 있습니다. 민감한 코드는 공유하지 마세요.
+- 텔레메트리를 수집하지 않으며 코드나 사용 정보를 외부 서버로 보내지 않습니다.
+
+라이선스
+--------
+
+Classroom Live는 MIT License로 배포됩니다.
