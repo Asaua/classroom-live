@@ -22,7 +22,7 @@ using Task = System.Threading.Tasks.Task;
 namespace ClassroomLive.Extension
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Classroom Live", "현재 파일을 수업에 공유합니다.", "1.2.6")]
+    [InstalledProductRegistration("Classroom Live", "Share the current file with your class.", "1.3.0")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     // 솔루션이 없어도 로드돼야 한다. 명령이 DefaultDisabled라 패키지가 안 뜨면
     // 메뉴와 툴바가 통째로 회색이 되고, 정작 "실행"조차 누를 수 없다.
@@ -63,6 +63,7 @@ namespace ClassroomLive.Extension
         private static readonly string InstanceId = Guid.NewGuid().ToString("N");
         private static readonly uint CurrentProcessId = (uint)Process.GetCurrentProcess().Id;
         private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        private static readonly Mutex LanguageSetupMutex = new Mutex(false, "Local\\ClassroomLive.LanguageSetup");
         private readonly HashSet<string> sharedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> hiddenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private dynamic dte;
@@ -105,7 +106,19 @@ namespace ClassroomLive.Extension
                 hideCommand = Add(commands, ToggleHideCommandId, ToggleHide, QueryHide);
             }
 
+            ExtensionLocalization.Initialize();
+            if (!ExtensionLocalization.HasSavedLanguage && LanguageSetupMutex.WaitOne(0))
+            {
+                try
+                {
+                    using (var dialog = new LanguageSelectionDialog(RefreshCommands)) dialog.ShowDialog();
+                    ExtensionLocalization.Save(ExtensionLocalization.Code);
+                }
+                finally { LanguageSetupMutex.ReleaseMutex(); }
+            }
+
             SyncToolbarPreference();
+            RefreshCommands();
 
             syncTimer = new Timer(SyncActiveFile, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(ActiveIntervalMs));
         }
@@ -164,7 +177,8 @@ namespace ClassroomLive.Extension
             ThreadHelper.ThrowIfNotOnUIThread();
             var command = (OleMenuCommand)sender;
             command.Enabled = !hostStarting && !hostStopping;
-            command.Text = hostStarting ? "실행 중..." : hostStopping ? "종료 중..." : hostReachable ? "종료" : "실행";
+            command.Text = hostStarting ? L("action.running") : hostStopping ? L("action.ending") :
+                hostReachable ? L("action.end") : L("action.run");
         }
 
         private void QueryPause(object sender, EventArgs e)
@@ -173,8 +187,8 @@ namespace ClassroomLive.Extension
             var command = (OleMenuCommand)sender;
             command.Enabled = hostReachable && !hostStopping;
             command.Text = !hostReachable || hostStopping
-                ? "시작"
-                : broadcasting ? "일시정지" : everStarted ? "재개" : "시작";
+                ? L("action.start")
+                : broadcasting ? L("action.pause") : everStarted ? L("action.resume") : L("action.start");
         }
 
         private void QueryShare(object sender, EventArgs e)
@@ -184,7 +198,7 @@ namespace ClassroomLive.Extension
             var path = ActiveFilePath();
             command.Enabled = hostReachable && !hostStopping && !string.IsNullOrWhiteSpace(path);
             command.Text = hostReachable && !hostStopping &&
-                           path != null && sharedFiles.Contains(path) ? "공유 해제" : "공유";
+                           path != null && sharedFiles.Contains(path) ? L("action.unshare") : L("action.share");
         }
 
         private void QueryHide(object sender, EventArgs e)
@@ -195,7 +209,7 @@ namespace ClassroomLive.Extension
             // 공유 목록에 없는 파일은 숨길 것도 없다.
             command.Enabled = hostReachable && !hostStopping && path != null && sharedFiles.Contains(path);
             command.Text = hostReachable && !hostStopping &&
-                           path != null && hiddenFiles.Contains(path) ? "다시 보이기" : "숨김";
+                           path != null && hiddenFiles.Contains(path) ? L("action.show") : L("action.hide");
         }
 
         private void RefreshCommands()
@@ -207,6 +221,8 @@ namespace ClassroomLive.Extension
             if (hideCommand != null) QueryHide(hideCommand, EventArgs.Empty);
         }
 
+        private static string L(string key, params object[] values) => ExtensionLocalization.T(key, values);
+
         // --- 명령 ------------------------------------------------------------
 
         private void ToggleHost(object sender, EventArgs e)
@@ -216,7 +232,7 @@ namespace ClassroomLive.Extension
             if (hostReachable)
             {
                 hostStopping = true;
-                SetStatus("Classroom Live · 종료 중...");
+                SetStatus(L("vs.status.ending"));
                 RefreshCommands();
                 _ = JoinableTaskFactory.RunAsync(async delegate
                 {
@@ -225,7 +241,7 @@ namespace ClassroomLive.Extension
                     if (!ok)
                     {
                         hostStopping = false;
-                        SetStatus("Classroom Live · 종료하지 못했습니다");
+                        SetStatus(L("vs.status.endFailed"));
                         RefreshCommands();
                         return;
                     }
@@ -239,7 +255,7 @@ namespace ClassroomLive.Extension
             if (exe == null)
             {
                 ShowLaunchError(Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location) ?? "", "Host", "ClassroomLive.exe"),
-                    "VSIX에 포함된 호스트를 찾지 못했습니다. Classroom Live 확장을 다시 설치해 주세요.");
+                    L("vs.error.hostMissing"));
                 return;
             }
 
@@ -247,10 +263,10 @@ namespace ClassroomLive.Extension
             {
                 using (var process = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }))
                 {
-                    if (process == null) throw new InvalidOperationException("프로세스를 시작하지 못했습니다.");
+                    if (process == null) throw new InvalidOperationException(L("vs.error.processStart"));
                 }
                 hostStarting = true;
-                SetStatus("Classroom Live · 실행 중");
+                SetStatus(L("vs.status.running"));
                 SetInterval(ActiveIntervalMs);
                 RefreshCommands();
             }
@@ -277,14 +293,14 @@ namespace ClassroomLive.Extension
                 hostStarting = false;
                 ApplyReply(result);
                 RefreshCommands();
-                SetStatus("Classroom Live · 실행했습니다");
+                SetStatus(L("vs.status.started"));
                 return;
             }
 
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             hostStarting = false;
             RefreshCommands();
-            ShowLaunchError(exe, "30초 안에 서버 응답을 받지 못했습니다.");
+            ShowLaunchError(exe, L("vs.error.timeout"));
         }
 
         private async Task WaitForHostStopAsync()
@@ -298,14 +314,14 @@ namespace ClassroomLive.Extension
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
                 hostStopping = false;
                 hostReachable = false;
-                SetStatus("Classroom Live · 종료했습니다");
+                SetStatus(L("vs.status.ended"));
                 RefreshCommands();
                 return;
             }
 
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             hostStopping = false;
-            SetStatus("Classroom Live · 종료가 지연되고 있습니다");
+            SetStatus(L("vs.status.endDelayed"));
             RefreshCommands();
         }
 
@@ -323,10 +339,9 @@ namespace ClassroomLive.Extension
         private void ShowLaunchError(string path, string reason)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var message = "Classroom Live를 실행하지 못했습니다.\n\n" +
-                          "경로: " + path + "\n\n" + reason;
-            SetStatus("Classroom Live · 실행하지 못했습니다");
-            MessageBoxW(IntPtr.Zero, message, "Classroom Live · 실행 오류",
+            var message = L("vs.error.message", "path", path, "reason", reason);
+            SetStatus(L("vs.status.launchFailed"));
+            MessageBoxW(IntPtr.Zero, message, L("vs.error.title"),
                 MessageBoxOk | MessageBoxIconError);
         }
 
@@ -339,7 +354,7 @@ namespace ClassroomLive.Extension
                 var ok = await PostControlAsync("broadcast", "{\"enabled\":" + (next ? "true" : "false") + "}");
                 if (!ok)
                 {
-                    SetStatus("Classroom Live · 호스트에 연결하지 못했습니다");
+                    SetStatus(L("vs.status.hostOffline"));
                     return;
                 }
                 var resuming = next && everStarted;
@@ -347,8 +362,8 @@ namespace ClassroomLive.Extension
                 if (next) everStarted = true;
                 if (resuming) await RefreshSharedFilesAsync();
                 SetStatus(next
-                    ? (resuming ? "Classroom Live · 재개" : "Classroom Live · 시작")
-                    : "Classroom Live · 일시정지");
+                    ? L(resuming ? "vs.status.resumed" : "vs.status.startedClass")
+                    : L("vs.status.paused"));
                 RefreshCommands();
             });
         }
@@ -361,7 +376,7 @@ namespace ClassroomLive.Extension
                 var update = CaptureActiveFile(includeContent: true);
                 if (update == null)
                 {
-                    SetStatus("Classroom Live · 코드 파일을 선택해 주세요");
+                    SetStatus(L("vs.status.chooseFile"));
                     return;
                 }
 
@@ -376,7 +391,7 @@ namespace ClassroomLive.Extension
                     result = await PostAsync(update);
                     ApplyReply(result, update.FilePath);
                     SetStatus(result.Status == HttpStatusCode.OK
-                        ? "Classroom Live · " + Path.GetFileName(update.FilePath) + " 공유 해제"
+                        ? L("vs.status.unshared", "name", Path.GetFileName(update.FilePath))
                         : "Classroom Live · " + ReplyError(result));
                 }
                 else
@@ -386,8 +401,8 @@ namespace ClassroomLive.Extension
                     ApplyReply(result, update.FilePath);
                     if (result.Status == HttpStatusCode.OK)
                     {
-                        SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) +
-                            (everStarted ? " 공유" : " 공유 예정"));
+                        SetStatus(L(everStarted ? "vs.status.shared" : "vs.status.prepared",
+                            "name", Path.GetFileName(update.FilePath)));
                     }
                     else
                     {
@@ -411,12 +426,12 @@ namespace ClassroomLive.Extension
                 ApplyReply(result, update.FilePath);
                 if (result.Status != HttpStatusCode.OK)
                 {
-                    SetStatus("Classroom Live · 호스트에 연결하지 못했습니다");
+                    SetStatus(L("vs.status.hostOffline"));
                     return;
                 }
 
-                SetStatus("Classroom Live · " + Path.GetFileName(update.FilePath) +
-                    (hide ? " 숨김" : " 다시 보임"));
+                SetStatus(L(hide ? "vs.status.hidden" : "vs.status.shown",
+                    "name", Path.GetFileName(update.FilePath)));
             });
         }
 
@@ -489,6 +504,9 @@ namespace ClassroomLive.Extension
             }
 
             isOwner = result.Reply.Owner;
+            var languageChanged = !string.IsNullOrEmpty(result.Reply.Language) &&
+                                  !string.Equals(ExtensionLocalization.Code, result.Reply.Language, StringComparison.OrdinalIgnoreCase) &&
+                                  ExtensionLocalization.Apply(result.Reply.Language);
             broadcasting = result.Reply.Broadcasting;
             everStarted = result.Reply.EverStarted;
             if (result.Reply.Ended) hostStopping = true;
@@ -532,7 +550,7 @@ namespace ClassroomLive.Extension
                     _ = JoinableTaskFactory.RunAsync(() => RestoreSharedFilesAsync(newFiles));
                 }
             }
-            if (fileStateChanged || oldReachable != hostReachable ||
+            if (languageChanged || fileStateChanged || oldReachable != hostReachable ||
                 oldBroadcasting != broadcasting || oldEverStarted != everStarted || oldStopping != hostStopping)
                 RefreshCommands();
             if (resumedFromHost) _ = JoinableTaskFactory.RunAsync(RefreshSharedFilesAsync);
@@ -602,8 +620,8 @@ namespace ClassroomLive.Extension
                 ApplyReply(result, path);
                 if (result.Status == HttpStatusCode.OK)
                 {
-                    SetStatus("Classroom Live · " + Path.GetFileName(path) +
-                        (everStarted ? " 공유" : " 공유 예정"));
+                    SetStatus(L(everStarted ? "vs.status.shared" : "vs.status.prepared",
+                        "name", Path.GetFileName(path)));
                 }
                 else
                 {
@@ -618,7 +636,7 @@ namespace ClassroomLive.Extension
                 update.Content = null;
                 var result = await PostAsync(update);
                 ApplyReply(result, path);
-                SetStatus("Classroom Live · " + Path.GetFileName(path) + " 공유 해제");
+                SetStatus(L("vs.status.unshared", "name", Path.GetFileName(path)));
             }
         }
 
@@ -823,8 +841,9 @@ namespace ClassroomLive.Extension
 
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             var answer = MessageBoxW(IntPtr.Zero,
-                result.Reply.Warning + "\n\n파일: " + Path.GetFileName(update.FilePath),
-                "Classroom Live · 민감 정보 확인",
+                L("vs.sensitive.file", "warning", ServerText(result.Reply.Warning),
+                    "name", Path.GetFileName(update.FilePath)),
+                L("vs.sensitive.title"),
                 MessageBoxYesNo | MessageBoxIconWarning | MessageBoxDefaultNo);
             if (answer != MessageBoxYes) return result;
 
@@ -836,10 +855,18 @@ namespace ClassroomLive.Extension
         {
             if (result.Reply != null)
             {
-                if (!string.IsNullOrEmpty(result.Reply.Warning)) return "공유를 취소했습니다";
-                if (!string.IsNullOrEmpty(result.Reply.BlockReason)) return result.Reply.BlockReason;
+                if (!string.IsNullOrEmpty(result.Reply.Warning)) return L("vs.error.cancelled");
+                if (!string.IsNullOrEmpty(result.Reply.BlockReason)) return ServerText(result.Reply.BlockReason);
             }
-            return result.Status.HasValue ? "공유하지 못했습니다" : "호스트 실행 대기";
+            return result.Status.HasValue ? L("vs.error.shareFailed") : L("vs.error.waitingHost");
+        }
+
+        private static string ServerText(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+            var translated = L(value);
+            return translated == value && value.StartsWith("security.", StringComparison.Ordinal) ?
+                L("file.notShareable") : translated;
         }
 
         /// <summary>실행/종료/일시정지처럼 파일과 무관한 조작.</summary>
@@ -923,6 +950,7 @@ namespace ClassroomLive.Extension
             [DataMember(Name = "restoreId")] public string RestoreId { get; set; }
             [DataMember(Name = "restoreFiles")] public RestoreFile[] RestoreFiles { get; set; }
             [DataMember(Name = "sessionId")] public string SessionId { get; set; }
+            [DataMember(Name = "language")] public string Language { get; set; }
         }
 
         [DataContract]

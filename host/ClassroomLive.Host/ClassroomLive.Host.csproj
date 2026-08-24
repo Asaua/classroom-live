@@ -8,9 +8,9 @@
     <OutputType>WinExe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>1.2.6</Version>
-    <AssemblyVersion>1.2.6.0</AssemblyVersion>
-    <FileVersion>1.2.6.0</FileVersion>
+    <Version>1.3.0</Version>
+    <AssemblyVersion>1.3.0.0</AssemblyVersion>
+    <FileVersion>1.3.0.0</FileVersion>
     <Authors>Asau</Authors>
     <Company>Asau</Company>
     <Product>Classroom Live</Product>
@@ -27,6 +27,11 @@
     <!-- Web SDK는 publish 때만 wwwroot를 내보낸다. build 산출물로 바로 실행해도
          화면이 뜨도록 출력 폴더에도 복사한다. -->
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\locales\*.json"
+             Link="wwwroot\locales\%(Filename)%(Extension)"
+             TargetPath="wwwroot\locales\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

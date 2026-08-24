@@ -37,6 +37,7 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     Args = args,
     ContentRootPath = publishedRoot
 });
+var locales = new LocaleStore(webRoot);
 var port = int.TryParse(Environment.GetEnvironmentVariable("CLASSROOM_LIVE_PORT"), out var configuredPort)
     ? configuredPort
     : 5050;
@@ -44,7 +45,8 @@ var port = int.TryParse(Environment.GetEnvironmentVariable("CLASSROOM_LIVE_PORT"
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 // 코드 100만 글자를 JSON/UTF-8로 보낼 수 있게 하되 Kestrel 기본 30MB보다 훨씬 작게 막는다.
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 8 * 1024 * 1024);
-builder.Services.AddSingleton(_ => ClassroomSession.CreatePersistent());
+builder.Services.AddSingleton(locales);
+builder.Services.AddSingleton(_ => ClassroomSession.CreatePersistent(locales.Language));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -117,6 +119,17 @@ app.MapGet("/host", async context =>
     await context.Response.SendFileAsync(Path.Combine(webRoot, "index.html"));
 });
 
+app.MapGet("/api/locales", (LocaleStore store) => Results.Json(new
+{
+    language = store.Language,
+    locales = store.Locales.Select(locale => new
+    {
+        code = locale.Code,
+        name = locale.Name,
+        direction = locale.Direction
+    })
+}));
+
 app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
 {
     var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
@@ -159,6 +172,16 @@ app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest reques
         return Results.Unauthorized();
 
     session.SetBroadcasting(request.Enabled);
+    return Results.Ok();
+});
+
+app.MapPost("/api/host/language", (HttpContext context, LanguageRequest request,
+    ClassroomSession session, LocaleStore store) =>
+{
+    if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    if (!store.SetLanguage(request.Code)) return Results.BadRequest();
+    session.SetLanguage(store.Language);
     return Results.Ok();
 });
 

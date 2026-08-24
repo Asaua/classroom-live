@@ -14,6 +14,11 @@
   if (tokenFromUrl || pinFromUrl) history.replaceState(null, "", location.pathname);
 
   const adminToken = localStorage.getItem("classroom-live:admin") || "";
+  const studentLanguageKey = "classroom-live:language";
+  let catalog = Object.create(null);
+  let localeCode = "ko";
+  let localeOptions = [];
+  let hostLanguage = "ko";
   let pin = sessionStorage.getItem("classroom-live:pin") || "";
   let selectedId = localStorage.getItem("classroom-live:selected-file") || "";
   let selectedName = "";
@@ -25,14 +30,15 @@
   let requestRunning = false;
   let blockedUntil = 0;
   let shuttingDown = false;
+  let currentSessionState = "connecting";
 
   const SESSION_STATES = Object.freeze({
-    connecting: { name: "수업 연결 중", connection: "연결 중", sync: "연결 중", kind: "waiting", viewers: false },
-    before: { name: "수업 시작 전", connection: "대기", sync: "시작 전", kind: "waiting", viewers: true },
-    live: { name: "수업 중", connection: "실시간", sync: "실시간", kind: "live", viewers: true },
-    paused: { name: "수업 일시정지", connection: "일시정지", sync: "일시정지", kind: "paused", viewers: true },
-    ended: { name: "세션 종료됨", connection: "종료됨", sync: "종료됨", kind: "ended", viewers: false },
-    disconnected: { name: "수업 연결 끊김", connection: "끊김", sync: "연결 끊김", kind: "waiting", viewers: false },
+    connecting: { key: "connecting", kind: "waiting", viewers: false },
+    before: { key: "before", kind: "waiting", viewers: true },
+    live: { key: "live", kind: "live", viewers: true },
+    paused: { key: "paused", kind: "paused", viewers: true },
+    ended: { key: "ended", kind: "ended", viewers: false },
+    disconnected: { key: "disconnected", kind: "waiting", viewers: false },
   });
 
   const FONT_STEPS = [11, 12.5, 14, 16, 18, 21, 24];
@@ -56,7 +62,96 @@
 
   if (isHost) $("hostControls").hidden = false;
   if (!isHost && !pin) showGate("");
-  setSessionState("connecting");
+
+  function t(key, values = {}) {
+    return String(catalog[key] ?? key).replace(/\{([a-z][a-z0-9]*)\}/gi,
+      (_, name) => values[name] ?? `{${name}}`);
+  }
+
+  function plural(key, count) {
+    const form = new Intl.PluralRules(localeCode).select(count);
+    const candidate = `${key}.${form}`;
+    return t(catalog[candidate] ? candidate : `${key}.other`, { count });
+  }
+
+  function applyStaticTranslations() {
+    document.documentElement.lang = localeCode;
+    document.documentElement.dir = catalog.$direction === "rtl" ? "rtl" : "ltr";
+    for (const element of document.querySelectorAll("[data-i18n]"))
+      setText(element, t(element.dataset.i18n));
+    for (const element of document.querySelectorAll("[data-i18n-title]"))
+      setTitle(element, t(element.dataset.i18nTitle));
+    for (const element of document.querySelectorAll("[data-i18n-aria]"))
+      element.setAttribute("aria-label", t(element.dataset.i18nAria));
+    setText($("languageCode"), localeCode.toUpperCase());
+    setTitle($("languageButton"), t("language.choose"));
+    $("languageButton").setAttribute("aria-label", t("language.choose"));
+  }
+
+  async function loadLocale(code) {
+    const safe = localeOptions.some((item) => item.code === code) ? code : "ko";
+    const response = await fetch(`/locales/${encodeURIComponent(safe)}.json`, { cache: "no-store" });
+    if (!response.ok) throw new Error("locale");
+    catalog = await response.json();
+    localeCode = safe;
+    applyStaticTranslations();
+    renderLanguageOptions();
+    setSessionState(currentSessionState || "connecting");
+    if (latestHostState) render(latestHostState.classroom, latestHostState);
+  }
+
+  async function initializeLocalization() {
+    try {
+      const response = await fetch("/api/locales", { cache: "no-store" });
+      const data = await response.json();
+      localeOptions = data.locales || [];
+      hostLanguage = data.language || "ko";
+      const chosen = isHost ? hostLanguage : localStorage.getItem(studentLanguageKey) || hostLanguage;
+      await loadLocale(chosen);
+    } catch {
+      localeOptions = [{ code: "ko", name: "한국어", direction: "ltr" }];
+      catalog = Object.fromEntries([...document.querySelectorAll("[data-i18n]")]
+        .map((element) => [element.dataset.i18n, element.textContent]));
+      applyStaticTranslations();
+      setSessionState("connecting");
+    }
+  }
+
+  function renderLanguageOptions() {
+    const list = $("languageList");
+    if (!list) return;
+    list.replaceChildren(...localeOptions.map((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `language-option${item.code === localeCode ? " is-selected" : ""}`;
+      button.textContent = item.name;
+      button.addEventListener("click", () => void chooseLanguage(item.code));
+      return button;
+    }));
+  }
+
+  async function chooseLanguage(code) {
+    await loadLocale(code);
+    if (isHost) {
+      await fetch("/api/host/language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+        body: JSON.stringify({ code }),
+      });
+      hostLanguage = code;
+    } else {
+      localStorage.setItem(studentLanguageKey, code);
+    }
+  }
+
+  $("languageButton").addEventListener("click", () => {
+    renderLanguageOptions();
+    $("languageDialog").showModal();
+  });
+  $("languageForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    $("languageDialog").close();
+  });
 
   // 한 번 읽으면 끝인 안내다. 교수 화면에는 애초에 필요 없고,
   // 학생도 닫거나 파일을 직접 골라보면 다시 뜨지 않는다.
@@ -125,10 +220,10 @@
   $("fontSmaller").addEventListener("click", () => stepFont(-1));
   $("fontLarger").addEventListener("click", () => stepFont(1));
   $("copyCode").addEventListener("click", async () => {
-    if (!currentContent) return notify("복사할 코드가 없어요");
+    if (!currentContent) return notify(t("notice.noCode"));
     notify(await copyText(currentContent)
-      ? "코드를 복사했어요"
-      : "복사하지 못했어요. 직접 선택해 주세요");
+      ? t("notice.codeCopied")
+      : t("notice.copyFailed"));
   });
   $("followProfessor").addEventListener("click", () => setFollowing(!following));
 
@@ -147,7 +242,7 @@
     // 주소가 여러 개면 첫 번째를 말없이 복사하면 안 된다. 가상 어댑터나
     // 다른 네트워크 주소를 학생에게 나눠주면 아무도 못 붙는데 이유를 알 수 없다.
     if (urls.length > 1) {
-      popup("학생이 접속할 주소를 고르세요", urls.map((url) => ({
+      popup(t("notice.chooseAddress"), urls.map((url) => ({
         label: hostOf(url),
         select: () => void copyAndFlash(url),
       })));
@@ -160,7 +255,7 @@
     if (button.dataset.shared === "1") return;
     // 확장자, 크기, 솔루션 밖 여부는 호스트의 보안 규칙이 정한다.
     if (button.dataset.shareable !== "1")
-      return notify(button.dataset.reason || "공유할 수 없는 파일이에요");
+      return notify(button.dataset.reason || t("notice.notShareable"));
     button.disabled = true;
     try {
       const response = await fetch("/api/host/share", {
@@ -169,10 +264,10 @@
         body: JSON.stringify({ enabled: true }),
       });
       notify(response.ok
-        ? (latestClassroom?.everStarted ? "공유를 요청했어요" : "준비 목록에 추가를 요청했어요")
-        : "요청에 실패했어요");
+        ? (latestClassroom?.everStarted ? t("notice.shareRequested") : t("notice.prepareRequested"))
+        : t("notice.requestFailed"));
     } catch {
-      notify("확장에 연결하지 못했어요");
+      notify(t("notice.extensionOffline"));
     } finally {
       button.disabled = false;
     }
@@ -182,7 +277,7 @@
   $("copyPin").addEventListener("click", async () => {
     const pinValue = $("pinValue").textContent.trim();
     if (!pinValue || pinValue.startsWith("-")) return;
-    notify(await copyText(pinValue) ? "PIN을 복사했어요" : "복사하지 못했어요");
+    notify(await copyText(pinValue) ? t("notice.pinCopied") : t("notice.copyGenericFailed"));
   });
 
   $("shutdown").addEventListener("click", async () => {
@@ -194,7 +289,7 @@
       await fetch("/api/host/shutdown", { method: "POST", headers: { "X-Admin-Token": adminToken } });
     } catch { /* 종료 중에 연결이 끊기는 것은 정상이다. */ }
     setSessionState("ended");
-    setText($("hostStatus"), "종료됨");
+    setText($("hostStatus"), t("state.ended.connection"));
     // 서버가 없으므로 이 버튼들은 이제 아무것도 하지 못한다.
     // 화면이 덮이더라도 눌리는 상태로 두지 않는다.
     for (const id of ["toggleBroadcast", "shutdown", "allowFirewall", "copyLink", "toggleShare", "copyPin"])
@@ -216,14 +311,14 @@
   $("allowFirewall").addEventListener("click", async () => {
     const button = $("allowFirewall");
     button.disabled = true;
-    button.textContent = "요청 중";
+    button.textContent = t("host.firewall.requesting");
     try {
       const response = await fetch("/api/host/firewall", {
         method: "POST", headers: { "X-Admin-Token": adminToken },
       });
-      button.textContent = response.ok ? "허용됨" : "다시 시도";
+      button.textContent = response.ok ? t("host.firewall.allowed") : t("host.firewall.retry");
     } catch {
-      button.textContent = "다시 시도";
+      button.textContent = t("host.firewall.retry");
     } finally {
       button.disabled = false;
     }
@@ -240,11 +335,11 @@
       const preparing = latestClassroom?.everStarted !== true;
       notify(response.ok
         ? (preparing
-          ? (hidden ? "숨김 상태로 준비했어요" : "보이는 상태로 준비했어요")
-          : (hidden ? "학생 화면에서 숨겼어요" : "다시 보이게 했어요"))
-        : "요청에 실패했어요");
+          ? (hidden ? t("notice.preparedHidden") : t("notice.preparedVisible"))
+          : (hidden ? t("notice.hidden") : t("notice.visible")))
+        : t("notice.requestFailed"));
     } catch {
-      notify("요청에 실패했어요");
+      notify(t("notice.requestFailed"));
     }
     await refresh();
   }
@@ -257,9 +352,9 @@
   async function copyAndFlash(url) {
     const button = $("copyLink");
     const copied = await copyText(url);
-    button.textContent = copied ? "복사됨" : "복사 실패";
-    notify(copied ? "주소를 복사했어요" : "복사하지 못했어요");
-    setTimeout(() => { button.textContent = "주소 복사"; }, 1200);
+    button.textContent = copied ? t("notice.copySuccessShort") : t("notice.copyFailureShort");
+    notify(copied ? t("notice.addressCopied") : t("notice.copyGenericFailed"));
+    setTimeout(() => { button.textContent = t("host.copyAddress"); }, 1200);
   }
 
   function showFollowNote() {
@@ -284,7 +379,7 @@
     $("filePanel").classList.toggle("is-open", open);
     $("backdrop").hidden = !open;
     $("mobileFiles").setAttribute("aria-expanded", String(open));
-    $("mobileFiles").setAttribute("aria-label", `공유 파일 목록 ${open ? "닫기" : "열기"}`);
+    $("mobileFiles").setAttribute("aria-label", t(open ? "mobile.files.close" : "mobile.files.open"));
     if (open && addHistory && history.state?.classroomFiles !== true)
       history.pushState({ ...history.state, classroomFiles: true }, "");
   }
@@ -345,7 +440,7 @@
   function confirmShutdown(viewers) {
     const dialog = $("confirmDialog");
     const message = $("confirmMessage");
-    message.textContent = viewers > 0 ? `현재 ${viewers}명이 수업을 보고 있습니다.` : "";
+    message.textContent = viewers > 0 ? plural("dialog.end.viewers", viewers) : "";
     message.hidden = viewers === 0;
     dialog.returnValue = "cancel";
     history.pushState({ ...history.state, classroomConfirm: true }, "");
@@ -372,7 +467,7 @@
 
   function showRestore(count) {
     if (restorePromptBusy || $("restoreDialog").open) return;
-    setText($("restoreMessage"), `직전 세션에서 사용한 파일 ${count}개가 있습니다.`);
+    setText($("restoreMessage"), plural("dialog.restore.message", count));
     history.pushState({ ...history.state, classroomRestore: true }, "");
     $("restoreDialog").showModal();
   }
@@ -486,11 +581,11 @@
       if (!response.ok) {
         if (!isHost && response.status === 429) {
           blockedUntil = Date.now() + 60_000;
-          showGate("시도가 너무 많아요. 1분 뒤에 다시 해주세요");
+          showGate(t("join.tooMany"));
         } else if (!isHost && response.status === 401) {
           pin = "";
           sessionStorage.removeItem("classroom-live:pin");
-          showGate("PIN이 맞지 않아요");
+          showGate(t("join.badPin"));
         }
         setSessionState("disconnected");
         return;
@@ -500,6 +595,9 @@
       latestHostState = isHost ? payload : null;
       const classroom = isHost ? payload.classroom : payload;
       latestClassroom = classroom;
+      hostLanguage = classroom.language || payload.language || hostLanguage;
+      if (!isHost && !localStorage.getItem(studentLanguageKey) && hostLanguage !== localeCode)
+        await loadLocale(hostLanguage);
       $("gate").hidden = true;
       render(classroom, payload);
     } catch {
@@ -528,8 +626,8 @@
       const next = classroom.professorActiveId || readableFiles[0]?.id || "";
       // 옮겨갈 파일이 없는데 "옮겼어요"라고 하면 안 된다.
       if (selectedName) notify(next
-        ? `${selectedName} 공유가 끝나 다른 파일로 옮겼어요`
-        : `${selectedName} 공유가 끝났어요`);
+        ? t("notice.fileEndedMoved", { name: selectedName })
+        : t("notice.fileEnded", { name: selectedName }));
       selectedId = next;
     } else if (!selectedId) {
       selectedId = classroom.professorActiveId || readableFiles[0]?.id || "";
@@ -544,11 +642,13 @@
     if (!ended)
       setSessionState(live ? "live" : started ? "paused" : "before");
     setText($("viewerCount"), String(classroom.viewers));
+    setText($("viewerSuffix"), t("viewer.count", { count: "" }));
     setText($("fileCount"), String(files.length));
     setText($("mobileFileCount"), String(files.length));
 
-    const professorName = ended ? "종료됨" : classroom.professorActiveName || professor?.name ||
-      (classroom.professorAway ? "자리비움" : live ? "없음" : started ? "일시정지" : "시작 전");
+    const professorName = ended ? t("professor.ended") : classroom.professorActiveName || professor?.name ||
+      (classroom.professorAway ? t("professor.away") : live ? t("professor.none") :
+        started ? t("professor.paused") : t("professor.before"));
     setText($("professorFile"), professorName);
     setTitle($("professorFile"), professor?.path || professorName);
 
@@ -563,13 +663,13 @@
       $("emptyState").hidden = true;
       $("codeScroll").hidden = false;
     } else {
-      setText($("fileName"), "파일 없음");
-      setTitle($("fileName"), "파일 없음");
-      setText($("filePath"), "교수님이 공유하면 여기에 나타나요.");
+      setText($("fileName"), t("file.none"));
+      setTitle($("fileName"), t("file.none"));
+      setText($("filePath"), t("file.none.path"));
       setTitle($("filePath"), "");
       setText($("fileType"), "···");
       setText($("language"), "Text");
-      setText($("lineCount"), "0줄");
+      setText($("lineCount"), plural("file.lines", 0));
       $("codeLines").replaceChildren();
       renderedRows = [];
       renderedFileId = "";
@@ -608,8 +708,8 @@
       return;
     }
 
-    setText(button, following ? "따라가는 중" : "따라가기");
-    setTitle(button, following ? "따라가기 끄기" : `교수님이 보는 ${line}줄로 이동하고 계속 따라갑니다`);
+    setText(button, following ? t("action.following") : t("action.follow"));
+    setTitle(button, following ? t("follow.off") : t("follow.on", { line }));
     if (following && line !== followedLine) {
       followedLine = line;
       scrollToLine(line);
@@ -648,7 +748,7 @@
     }
 
     while (renderedRows.length > lines.length) renderedRows.pop().node.remove();
-    setText($("lineCount"), `${lines.length}줄`);
+    setText($("lineCount"), plural("file.lines", lines.length));
   }
 
   function createRow() {
@@ -794,7 +894,7 @@ while with yield None True False
     const grouped = new Map();
     for (const file of files) {
       const id = file.workspaceId || "workspace";
-      if (!grouped.has(id)) grouped.set(id, { id, name: file.workspaceName || "프로젝트", files: [] });
+      if (!grouped.has(id)) grouped.set(id, { id, name: file.workspaceName || t("file.project"), files: [] });
       grouped.get(id).files.push(file);
     }
     const groups = Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name, "ko"));
@@ -856,7 +956,7 @@ while with yield None True False
     group.classList.toggle("is-professor-workspace", active);
     group.classList.toggle("has-heading", showHeading);
     setText(group.parts.name, workspace.name);
-    setTitle(group.parts.heading, `${workspace.name} ${collapsedWorkspaces.has(workspace.id) ? "펼치기" : "접기"}`);
+    setTitle(group.parts.heading, t(collapsedWorkspaces.has(workspace.id) ? "file.expand" : "file.collapse", { name: workspace.name }));
     setWorkspaceCollapsed(group, showHeading && collapsedWorkspaces.has(workspace.id));
     renderWorkspaceProjects(group.parts.items, workspace, professorActiveId, professorProjectId);
   }
@@ -874,7 +974,7 @@ while with yield None True False
       const loose = !file.projectId;
       const id = file.projectId || `${workspace.id}:loose`;
       if (!grouped.has(id)) grouped.set(id, {
-        id, name: file.projectName || "기타 파일", loose, files: []
+        id, name: file.projectName || t("file.misc"), loose, files: []
       });
       grouped.get(id).files.push(file);
     }
@@ -937,7 +1037,7 @@ while with yield None True False
     group.classList.toggle("has-heading", showHeading);
     group.classList.toggle("is-professor-project", project.id === professorProjectId);
     setText(group.parts.name, project.name);
-    setTitle(group.parts.heading, `${project.name} ${collapsedProjects.has(project.id) ? "펼치기" : "접기"}`);
+    setTitle(group.parts.heading, t(collapsedProjects.has(project.id) ? "file.expand" : "file.collapse", { name: project.name }));
     setProjectCollapsed(group, showHeading && collapsedProjects.has(project.id));
     renderProjectFiles(group.parts.items, project, professorActiveId);
   }
@@ -1038,7 +1138,7 @@ while with yield None True False
     item.classList.toggle("is-collapsed", collapsed);
     item.setAttribute("aria-expanded", String(!collapsed));
     setText(item.parts.name, row.name);
-    setTitle(item, `${row.path} ${collapsed ? "펼치기" : "접기"}`);
+    setTitle(item, `${row.path} · ${t(collapsed ? "file.expand" : "file.collapse", { name: row.name })}`);
   }
 
   function createFileItem(file) {
@@ -1068,7 +1168,7 @@ while with yield None True False
     copy.append(name, updated);
     const badge = document.createElement("span");
     badge.className = "professor-badge";
-    badge.textContent = "교수님";
+    badge.textContent = t("professor.label");
     badge.hidden = true;
     open.append(icon, copy, badge);
     item.append(open);
@@ -1114,21 +1214,21 @@ while with yield None True False
     if (isSelected) open.setAttribute("aria-current", "page");
     else open.removeAttribute("aria-current");
 
-    const pendingText = file.missing ? "파일을 찾을 수 없음" : "Visual Studio에서 파일을 열어 주세요";
+    const pendingText = file.missing ? t("file.missing") : t("file.openInVs");
     setTitle(open, file.pending ? `${file.path} · ${pendingText}` : `${file.path} · ${file.language}`);
     open.disabled = Boolean(file.pending);
     setText(icon, shortLanguage(file.language));
     setText(name, file.name);
     setText(updated, file.pending ? pendingText : relativeTime(file.updatedAt));
     badge.hidden = file.id !== professorActiveId;
-    if (remove) remove.setAttribute("aria-label", `${file.name} ${latestClassroom?.everStarted ? "공유 해제" : "준비 목록에서 제거"}`);
+    if (remove) remove.setAttribute("aria-label", t(latestClassroom?.everStarted ? "file.remove" : "file.removePrepared", { name: file.name }));
     if (hide) {
       // 아이콘은 상태를, aria-pressed는 눌린 상태(=숨김)를 나타낸다.
       const isHidden = Boolean(file.hidden);
       hide.dataset.hidden = isHidden ? "1" : "0";
       hide.setAttribute("aria-pressed", String(isHidden));
-      hide.setAttribute("aria-label", `${file.name} 학생 화면에서 숨기기`);
-      setTitle(hide, isHidden ? "숨김 · 눌러서 다시 보이기" : "보이는 중 · 눌러서 숨기기");
+      hide.setAttribute("aria-label", t("file.hide", { name: file.name }));
+      setTitle(hide, t(isHidden ? "file.hidden.title" : "file.visible.title"));
     }
   }
 
@@ -1137,12 +1237,14 @@ while with yield None True False
     // 한 번도 시작한 적 없으면 "시작", 돌다가 멈췄으면 "재개"로 구분한다.
     const broadcastButton = $("toggleBroadcast");
     setText(broadcastButton, payload.broadcasting
-      ? "일시정지"
-      : payload.everStarted ? "재개" : "시작");
+      ? t("action.pause")
+      : payload.everStarted ? t("action.resume") : t("action.start"));
     // 재개만 노란색으로 구분하고 시작·일시정지는 기본 초록색을 쓴다.
     broadcastButton.classList.toggle("is-resume", !payload.broadcasting && payload.everStarted);
-    setText($("hostStatus"), payload.visualStudioStatus);
-    setTitle($("hostStatus"), payload.visualStudioStatus);
+    const hostStatus = translateServerText(payload.visualStudioStatus,
+      payload.visualStudioStatusArgument ? { name: payload.visualStudioStatusArgument } : {});
+    setText($("hostStatus"), hostStatus);
+    setTitle($("hostStatus"), hostStatus);
     if (payload.restoreAvailable) showRestore(Number(payload.restoreFileCount) || 0);
 
     // 현재 Visual Studio 파일을 공유 목록의 +로 추가한다. 제거는 각 파일의 ×가 담당한다.
@@ -1160,9 +1262,9 @@ while with yield None True False
     setText(label, current);
     setTitle(label, displayPath);
     setText(share, shared ? "✓" : "+");
-    const reason = payload.currentFileBlockReason || "공유할 수 없는 파일입니다";
-    const action = shared ? `${current}은(는) 이미 추가되어 있습니다`
-      : shareable ? `${current}을(를) 추가합니다` : reason;
+    const reason = translateServerText(payload.currentFileBlockReason) || t("file.notShareable");
+    const action = shared ? t("file.alreadyAdded", { name: current })
+      : shareable ? t("file.add", { name: current }) : reason;
     share.setAttribute("aria-label", action);
     setTitle(share, action);
     share.classList.toggle("is-active", shared);
@@ -1184,9 +1286,10 @@ while with yield None True False
 
   function setSessionState(state) {
     const view = SESSION_STATES[state];
-    setText($("className"), view.name);
-    setConnection(view.connection, view.kind);
-    setText($("syncStatus"), view.sync);
+    currentSessionState = state;
+    setText($("className"), t(`state.${view.key}.name`));
+    setConnection(t(`state.${view.key}.connection`), view.kind);
+    setText($("syncStatus"), t(`state.${view.key}.sync`));
     $("viewerCount").parentElement.hidden = !view.viewers;
   }
 
@@ -1209,12 +1312,24 @@ while with yield None True False
 
   function relativeTime(value) {
     const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-    if (seconds < 10) return "방금 전";
-    if (seconds < 60) return `${seconds}초 전`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`;
-    return `${Math.floor(seconds / 3600)}시간 전`;
+    if (seconds < 10) return t("time.now");
+    if (seconds < 60) return plural("time.seconds", seconds);
+    if (seconds < 3600) return plural("time.minutes", Math.floor(seconds / 60));
+    return plural("time.hours", Math.floor(seconds / 3600));
   }
 
-  void refresh();
+  function translateServerText(value, values = {}) {
+    if (!value) return "";
+    if (catalog[value]) return t(value, values);
+    const exact = {
+      "연결 대기": "host.status.waiting",
+      "Visual Studio 연결 대기": "host.status.waiting",
+      "공유할 수 없는 파일": "file.notShareable",
+      "공유할 수 없는 파일입니다": "file.notShareable",
+    };
+    return exact[value] ? t(exact[value]) : value;
+  }
+
+  void initializeLocalization().then(refresh);
   setInterval(refresh, 750);
 })();

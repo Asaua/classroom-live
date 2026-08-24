@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="교수님 화면의 코드를 내 기기에서 봅니다.">
+  <meta name="description" content="Classroom Live">
   <title>Classroom Live</title>
   <link rel="icon" href="/favicon.png" type="image/png">
   <link rel="stylesheet" href="/styles.css">
@@ -16,26 +16,27 @@
         <img class="brand-mark" src="/favicon.png" alt="">
         <div>
           <div class="brand">Classroom Live <span class="byline">by 21210116 김성현</span></div>
-          <div class="class-name" id="className">수업 연결 중</div>
+          <div class="class-name" id="className" data-i18n="state.connecting.name">수업 연결 중</div>
         </div>
       </div>
       <div class="session-summary">
-        <span class="connection is-waiting" id="connection" aria-live="polite"><i></i><b>연결 중</b></span>
-        <span class="viewer-count" title="보고 있는 학생 수"><b id="viewerCount">0</b>명</span>
-        <button class="mobile-files" id="mobileFiles" type="button" aria-label="공유 파일 목록 열기" aria-expanded="false">파일 <span id="mobileFileCount">0</span></button>
+        <button class="language-button" id="languageButton" type="button" title="언어 선택" aria-label="언어 선택">◎ <b id="languageCode">KO</b></button>
+        <span class="connection is-waiting" id="connection" aria-live="polite"><i></i><b data-i18n="state.connecting.connection">연결 중</b></span>
+        <span class="viewer-count" data-i18n-title="viewer.title" title="보고 있는 학생 수"><b id="viewerCount">0</b><span id="viewerSuffix">명</span></span>
+        <button class="mobile-files" id="mobileFiles" type="button" data-i18n-aria="mobile.files.open" aria-label="공유 파일 목록 열기" aria-expanded="false"><span data-i18n="mobile.files">파일</span> <span id="mobileFileCount">0</span></button>
       </div>
     </header>
 
     <section class="host-controls" id="hostControls" hidden>
       <div class="host-state">
-        <strong id="hostStatus">연결 대기</strong>
-        <button class="tool-button" id="copyLink" type="button" title="학생에게 보낼 주소를 복사합니다">주소 복사</button>
-        <button class="pin" id="copyPin" type="button" title="눌러서 PIN 복사">PIN <b id="pinValue">------</b></button>
+        <strong id="hostStatus" data-i18n="host.status.waiting">연결 대기</strong>
+        <button class="tool-button" id="copyLink" type="button" data-i18n="host.copyAddress" data-i18n-title="host.copyAddress.title" title="학생에게 보낼 주소를 복사합니다">주소 복사</button>
+        <button class="pin" id="copyPin" type="button" data-i18n-title="host.copyPin.title" title="눌러서 PIN 복사">PIN <b id="pinValue">------</b></button>
       </div>
       <div class="host-actions">
-        <button class="secondary-button" id="allowFirewall" type="button" title="같은 와이파이의 학생이 접속할 수 있게 합니다">방화벽 허용</button>
-        <button class="primary-button" id="toggleBroadcast" type="button">시작</button>
-        <button class="secondary-button is-danger" id="shutdown" type="button">종료</button>
+        <button class="secondary-button" id="allowFirewall" type="button" data-i18n="host.firewall" data-i18n-title="host.firewall.title" title="같은 와이파이의 학생이 접속할 수 있게 합니다">방화벽 허용</button>
+        <button class="primary-button" id="toggleBroadcast" type="button" data-i18n="action.start">시작</button>
+        <button class="secondary-button is-danger" id="shutdown" type="button" data-i18n="action.end">종료</button>
       </div>
     </section>
 
@@ -46,37 +47,37 @@
             <span class="file-type" id="fileType">···</span>
             <div class="file-heading-copy">
               <div class="file-title-row">
-                <h1 id="fileName">파일 없음</h1>
+                <h1 id="fileName" data-i18n="file.none">파일 없음</h1>
               </div>
-              <p id="filePath">교수님이 공유하면 여기에 나타나요.</p>
+              <p id="filePath" data-i18n="file.none.path">교수님이 공유하면 여기에 나타나요.</p>
             </div>
           </div>
           <div class="professor-now">
-            <span class="eyebrow">교수님</span>
-            <strong><i></i><span id="professorFile">없음</span></strong>
+            <span class="eyebrow" data-i18n="professor.label">교수님</span>
+            <strong><i></i><span id="professorFile" data-i18n="professor.none">없음</span></strong>
           </div>
         </header>
 
         <div class="empty-state" id="emptyState">
           <span aria-hidden="true">{ }</span>
-          <h2>공유된 파일이 없어요</h2>
-          <p>교수님이 파일을 공유하면 코드가 나타나요.</p>
+          <h2 data-i18n="file.empty.title">공유된 파일이 없어요</h2>
+          <p data-i18n="file.empty.body">교수님이 파일을 공유하면 코드가 나타나요.</p>
         </div>
-        <div class="code-scroll" id="codeScroll" role="region" aria-label="공유 코드" tabindex="0" hidden>
+        <div class="code-scroll" id="codeScroll" role="region" data-i18n-aria="file.code" aria-label="공유 코드" tabindex="0" hidden>
           <div class="code-lines" id="codeLines"></div>
         </div>
 
         <footer class="statusbar">
-          <span class="status-live is-waiting" id="statusLive"><i class="status-dot"></i><span id="syncStatus" aria-live="polite">연결 중</span></span>
+          <span class="status-live is-waiting" id="statusLive"><i class="status-dot"></i><span id="syncStatus" aria-live="polite" data-i18n="state.connecting.sync">연결 중</span></span>
           <span class="status-meta" id="language">Text</span>
           <span class="status-meta" id="lineCount">0줄</span>
           <div class="viewer-tools">
-            <button class="tool-button" id="followProfessor" type="button" aria-pressed="false" hidden>따라가기</button>
-            <button class="tool-button" id="copyCode" type="button">복사</button>
-            <button class="tool-button" id="toggleWrap" type="button" aria-pressed="false">줄바꿈</button>
+            <button class="tool-button" id="followProfessor" type="button" aria-pressed="false" data-i18n="action.follow" hidden>따라가기</button>
+            <button class="tool-button" id="copyCode" type="button" data-i18n="action.copy">복사</button>
+            <button class="tool-button" id="toggleWrap" type="button" aria-pressed="false" data-i18n="action.wrap">줄바꿈</button>
             <span class="tool-group">
-              <button class="tool-button" id="fontSmaller" type="button" aria-label="글자 작게">A−</button>
-              <button class="tool-button" id="fontLarger" type="button" aria-label="글자 크게">A+</button>
+              <button class="tool-button" id="fontSmaller" type="button" data-i18n-aria="font.smaller" aria-label="글자 작게">A−</button>
+              <button class="tool-button" id="fontLarger" type="button" data-i18n-aria="font.larger" aria-label="글자 크게">A+</button>
             </span>
           </div>
         </footer>
@@ -84,22 +85,22 @@
 
       <aside class="file-panel" id="filePanel">
         <div class="panel-heading">
-          <h2>공유 파일</h2>
+          <h2 data-i18n="file.shared">공유 파일</h2>
           <div class="panel-tools">
             <span class="add-file-label" id="addFileLabel" hidden></span>
-            <button class="add-file" id="toggleShare" type="button" aria-label="현재 파일 추가" hidden>+</button>
+            <button class="add-file" id="toggleShare" type="button" data-i18n-aria="file.addCurrent" aria-label="현재 파일 추가" hidden>+</button>
             <span class="file-count" id="fileCount">0</span>
           </div>
         </div>
-        <nav class="file-list" id="fileList" aria-label="공유 파일 목록"></nav>
+        <nav class="file-list" id="fileList" data-i18n-aria="file.list" aria-label="공유 파일 목록"></nav>
         <div class="follow-note" id="followNote" hidden>
           <span aria-hidden="true">↗</span>
-          <div><strong>파일을 골라서 봐요</strong><p>교수님이 옮겨도 내 화면은 그대로예요.</p></div>
-          <button class="note-close" id="dismissNote" type="button" aria-label="안내 닫기">×</button>
+          <div><strong data-i18n="follow.title">파일을 골라서 봐요</strong><p data-i18n="follow.body">교수님이 옮겨도 내 화면은 그대로예요.</p></div>
+          <button class="note-close" id="dismissNote" type="button" data-i18n-aria="follow.close" aria-label="안내 닫기">×</button>
         </div>
       </aside>
 
-      <button class="backdrop" id="backdrop" type="button" aria-label="파일 목록 닫기" hidden></button>
+      <button class="backdrop" id="backdrop" type="button" data-i18n-aria="mobile.files.close" aria-label="파일 목록 닫기" hidden></button>
     </section>
   </main>
 
@@ -108,11 +109,11 @@
   <dialog class="confirm-dialog" id="confirmDialog" aria-labelledby="confirmTitle">
     <form class="confirm-card" id="confirmForm" method="dialog">
       <span class="eyebrow">Classroom Live</span>
-      <h1 id="confirmTitle">수업을 종료할까요?</h1>
+      <h1 id="confirmTitle" data-i18n="dialog.end.title">수업을 종료할까요?</h1>
       <p id="confirmMessage" hidden></p>
       <div class="confirm-actions">
-        <button class="secondary-button" type="submit" value="cancel" autofocus>취소</button>
-        <button class="secondary-button is-danger" type="submit" value="confirm">종료</button>
+        <button class="secondary-button" type="submit" value="cancel" data-i18n="action.cancel" autofocus>취소</button>
+        <button class="secondary-button is-danger" type="submit" value="confirm" data-i18n="action.end">종료</button>
       </div>
     </form>
   </dialog>
@@ -120,11 +121,11 @@
   <dialog class="confirm-dialog" id="restoreDialog" aria-labelledby="restoreTitle">
     <form class="confirm-card" id="restoreForm" method="dialog">
       <span class="eyebrow">Classroom Live</span>
-      <h1 id="restoreTitle">이전 공유 목록을 불러올까요?</h1>
+      <h1 id="restoreTitle" data-i18n="dialog.restore.title">이전 공유 목록을 불러올까요?</h1>
       <p id="restoreMessage"></p>
       <div class="confirm-actions">
-        <button class="secondary-button" type="submit" value="skip">건너뛰기</button>
-        <button class="primary-button" type="submit" value="restore" autofocus>불러오기</button>
+        <button class="secondary-button" type="submit" value="skip" data-i18n="action.skip">건너뛰기</button>
+        <button class="primary-button" type="submit" value="restore" data-i18n="action.restore" autofocus>불러오기</button>
       </div>
     </form>
   </dialog>
@@ -132,8 +133,8 @@
   <div class="ended" id="ended" role="alertdialog" aria-labelledby="endedTitle" hidden>
     <div class="ended-copy">
       <img class="brand-mark" src="/favicon.png" alt="">
-      <h1 id="endedTitle">세션이 종료되었습니다</h1>
-      <p>이 탭은 닫아도 됩니다.</p>
+      <h1 id="endedTitle" data-i18n="ended.title">세션이 종료되었습니다</h1>
+      <p data-i18n="ended.body">이 탭은 닫아도 됩니다.</p>
     </div>
   </div>
 
@@ -141,13 +142,24 @@
     <form class="gate-card" id="joinForm">
       <img class="brand-mark" src="/favicon.png" alt="">
       <span class="eyebrow">Classroom Live</span>
-      <h1>수업 참여</h1>
-      <p>교수님 화면의 6자리 PIN을 입력해 주세요.</p>
+      <h1 data-i18n="join.title">수업 참여</h1>
+      <p data-i18n="join.body">교수님 화면의 6자리 PIN을 입력해 주세요.</p>
       <label for="pinInput">PIN</label>
       <input id="pinInput" name="pin" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" placeholder="000000" required>
       <p class="gate-error" id="gateError" role="alert"></p>
-      <button class="primary-button" type="submit">입장</button>
+      <button class="primary-button" type="submit" data-i18n="action.enter">입장</button>
     </form>
   </div>
+
+  <dialog class="confirm-dialog language-dialog" id="languageDialog" aria-labelledby="languageTitle">
+    <form class="confirm-card" id="languageForm" method="dialog">
+      <span class="eyebrow">Classroom Live</span>
+      <h1 id="languageTitle" data-i18n="language.choose">언어 선택</h1>
+      <div class="language-list" id="languageList"></div>
+      <div class="confirm-actions">
+        <button class="primary-button" type="submit" value="confirm" data-i18n="language.confirm">확인</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

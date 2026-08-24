@@ -58,7 +58,7 @@
         <CommandFlag>DefaultDisabled</CommandFlag>
         <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>실행</ButtonText>
+          <ButtonText>Run</ButtonText>
           <CommandName>ClassroomLive.ToggleHost</CommandName>
         </Strings>
       </Button>
@@ -69,7 +69,7 @@
         <CommandFlag>DefaultDisabled</CommandFlag>
         <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>일시정지</ButtonText>
+          <ButtonText>Pause</ButtonText>
           <CommandName>ClassroomLive.TogglePause</CommandName>
         </Strings>
       </Button>
@@ -80,7 +80,7 @@
         <CommandFlag>DefaultDisabled</CommandFlag>
         <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>공유</ButtonText>
+          <ButtonText>Share</ButtonText>
           <CommandName>ClassroomLive.ToggleShare</CommandName>
         </Strings>
       </Button>
@@ -91,7 +91,7 @@
         <CommandFlag>DefaultDisabled</CommandFlag>
         <CommandFlag>TextOnly</CommandFlag>
         <Strings>
-          <ButtonText>숨김</ButtonText>
+          <ButtonText>Hide</ButtonText>
           <CommandName>ClassroomLive.ToggleHide</CommandName>
         </Strings>
       </Button>

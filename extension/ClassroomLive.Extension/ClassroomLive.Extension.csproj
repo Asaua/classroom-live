@@ -39,6 +39,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ClassroomLivePackage.cs" />
+    <Compile Include="Localization.cs" />
+    <Compile Include="LanguageSelectionDialog.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -62,6 +64,8 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
@@ -80,8 +84,12 @@
         <VSIXSubPath>Host</VSIXSubPath>
         <IncludeInVSIX>true</IncludeInVSIX>
       </Content>
-      <Content Include="$(BundledHostPublishDir)wwwroot\**\*">
-        <VSIXSubPath>Host\wwwroot\%(RecursiveDir)</VSIXSubPath>
+      <Content Include="$(BundledHostPublishDir)wwwroot\*.*">
+        <VSIXSubPath>Host\wwwroot</VSIXSubPath>
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(BundledHostPublishDir)wwwroot\locales\*.*">
+        <VSIXSubPath>Host\wwwroot\locales</VSIXSubPath>
         <IncludeInVSIX>true</IncludeInVSIX>
       </Content>
     </ItemGroup>

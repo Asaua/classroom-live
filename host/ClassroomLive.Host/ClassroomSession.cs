@@ -50,17 +50,25 @@ sealed class ClassroomSession
     private DateTimeOffset _ownerSeenAt;
     private DateTimeOffset _lastHostPoll = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastExtensionHeartbeat = DateTimeOffset.MinValue;
-    private string _visualStudioStatus = "연결 대기";
+    private string _visualStudioStatus = "host.vs.waiting";
+    private string? _visualStudioStatusArgument;
+    private string _language = "ko";
 
     public ClassroomSession() { }
 
-    internal ClassroomSession(string presetPath)
+    internal ClassroomSession(string presetPath, string language = "ko")
     {
         _presetPath = presetPath;
         _savedPreset = SessionPresetStore.Load(presetPath);
+        _language = language;
     }
 
-    public static ClassroomSession CreatePersistent() => new(SessionPresetStore.FilePath);
+    public static ClassroomSession CreatePersistent(string language = "ko") => new(SessionPresetStore.FilePath, language);
+
+    public void SetLanguage(string language)
+    {
+        lock (_gate) _language = language;
+    }
 
     public string Pin { get; } = RandomNumberGenerator.GetInt32(100_000, 1_000_000).ToString();
     public string SessionId { get; } = Guid.NewGuid().ToString("N");
@@ -239,7 +247,8 @@ sealed class ClassroomSession
                 if (activeId is not null && _files.TryGetValue(activeId, out var target))
                 {
                     _files[activeId] = target with { Hidden = action == "hide" };
-                    _visualStudioStatus = target.Name + (action == "hide" ? " · 숨김" : " · 다시 보임");
+                    _visualStudioStatus = action == "hide" ? "host.vs.hidden" : "host.vs.shown";
+                    _visualStudioStatusArgument = target.Name;
                     PresetChanged();
                 }
                 return ExtensionUpdateOutcome.Accepted;
@@ -256,7 +265,8 @@ sealed class ClassroomSession
                     if (_professorActiveId == id) ClearProfessorPointer();
                     PresetChanged();
                 }
-                _visualStudioStatus = "공유 해제됨";
+                _visualStudioStatus = "host.vs.unshared";
+                _visualStudioStatusArgument = null;
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -268,9 +278,8 @@ sealed class ClassroomSession
             {
                 // 멈춤 중에는 교수 포인터까지 그대로 둔다. 학생이 보던 화면이
                 // 발밑에서 움직이지 않아야 '멈춤'이라는 말이 지켜진다.
-                _visualStudioStatus = _everStarted
-                    ? "일시정지 · 코드 갱신을 멈췄어요"
-                    : "시작 전 · 아직 학생에게 전송하지 않아요";
+                _visualStudioStatus = _everStarted ? "host.vs.paused" : "host.vs.before";
+                _visualStudioStatusArgument = null;
                 return ExtensionUpdateOutcome.Accepted;
             }
 
@@ -284,16 +293,16 @@ sealed class ClassroomSession
                 _professorProjectId = activeProjectId;
                 _professorActiveLine = _professorActiveId is null ? null : activeLine;
                 _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
-                _visualStudioStatus = _professorActiveName is null
-                    ? "코드 파일을 선택해 주세요"
-                    : $"{_professorActiveName} · 공유 안 함";
+                _visualStudioStatus = _professorActiveName is null ? "host.vs.chooseFile" : "host.vs.notShared";
+                _visualStudioStatusArgument = _professorActiveName;
                 return ExtensionUpdateOutcome.Accepted;
             }
 
             if (!hasSafeActiveFile || request.Content is null)
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = _currentFileBlockReason ?? "공유할 수 없는 파일";
+                _visualStudioStatus = _currentFileBlockReason ?? "file.notShareable";
+                _visualStudioStatusArgument = null;
                 return ExtensionUpdateOutcome.Rejected;
             }
 
@@ -307,6 +316,7 @@ sealed class ClassroomSession
                 {
                     ClearProfessorPointer();
                     _visualStudioStatus = contentWarning;
+                    _visualStudioStatusArgument = null;
                     return ExtensionUpdateOutcome.NeedsConfirmation;
                 }
             }
@@ -314,7 +324,8 @@ sealed class ClassroomSession
             if (_unsharedFiles.Contains(activeId!))
             {
                 ClearProfessorPointer();
-                _visualStudioStatus = "공유 해제된 파일";
+                _visualStudioStatus = "host.vs.unsharedFile";
+                _visualStudioStatusArgument = null;
                 return ExtensionUpdateOutcome.Unshared;
             }
 
@@ -332,11 +343,11 @@ sealed class ClassroomSession
                 _professorAnchorLine = _professorActiveId is null ? null : anchorLine;
             }
             if (action != "refresh")
-                _visualStudioStatus = _broadcasting
-                    ? $"{Path.GetFileName(request.FilePath)} · 공유 중"
-                    : _everStarted
-                        ? $"{Path.GetFileName(request.FilePath)} · 추가됨 · 일시정지"
-                        : $"{Path.GetFileName(request.FilePath)} · 추가됨 · 시작 전";
+            {
+                _visualStudioStatus = _broadcasting ? "host.vs.sharing" :
+                    _everStarted ? "host.vs.addedPaused" : "host.vs.addedBefore";
+                _visualStudioStatusArgument = Path.GetFileName(request.FilePath);
+            }
             return ExtensionUpdateOutcome.Accepted;
         }
     }
@@ -468,7 +479,8 @@ sealed class ClassroomSession
                 hidden,
                 _restoreId,
                 restoreFiles,
-                SessionId);
+                SessionId,
+                _language);
         }
     }
 
@@ -565,7 +577,8 @@ sealed class ClassroomSession
             var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
             // 교수 화면은 숨긴 파일까지 봐야 되돌릴 수 있다.
             return new HostSnapshot(Snapshot(_ => true), _broadcasting, _everStarted, connected,
-                connected ? _visualStudioStatus : "Visual Studio 연결 대기",
+                connected ? _visualStudioStatus : "host.vs.waiting",
+                connected ? _visualStudioStatusArgument : null,
                 connected ? _currentFileName : null,
                 connected ? _currentFileDisplayPath : null,
                 connected && _currentFileShareable,
@@ -671,7 +684,8 @@ sealed class ClassroomSession
             _broadcasting,
             _everStarted,
             _ended,
-            files);
+            files,
+            _language);
     }
 
     private void PruneViewers()
@@ -751,7 +765,8 @@ sealed record ExtensionReply(
     bool Hidden,
     string? RestoreId,
     RestoreFile[] RestoreFiles,
-    string SessionId);
+    string SessionId,
+    string Language);
 
 sealed record RestoreFile(string Path, bool Hidden);
 
@@ -797,7 +812,8 @@ sealed record ClassroomSnapshot(
     bool Broadcasting,
     bool EverStarted,
     bool Ended,
-    SharedFile[] Files);
+    SharedFile[] Files,
+    string Language);
 
 sealed record HostSnapshot(
     ClassroomSnapshot Classroom,
@@ -806,6 +822,7 @@ sealed record HostSnapshot(
     bool EverStarted,
     bool VisualStudioConnected,
     string VisualStudioStatus,
+    string? VisualStudioStatusArgument,
     /// <summary>Visual Studio에서 지금 열려 있는 파일. 공유 여부와 무관하다.</summary>
     string? CurrentFileName,
     string? CurrentFileDisplayPath,
@@ -894,8 +911,8 @@ static class SecurityRules
     /// <summary>공유할 수 없으면 그 이유를, 공유해도 되면 null을 돌려준다.</summary>
     public static string? BlockReason(string filePath, string solutionRoot, string? content)
     {
-        if (string.IsNullOrWhiteSpace(solutionRoot)) return "솔루션이 열려 있지 않습니다";
-        if ((content?.Length ?? 0) > MaxCharacters) return "파일이 너무 큽니다";
+        if (string.IsNullOrWhiteSpace(solutionRoot)) return "security.noSolution";
+        if ((content?.Length ?? 0) > MaxCharacters) return "security.tooLarge";
 
         string fullFile;
         string fullRoot;
@@ -906,20 +923,20 @@ static class SecurityRules
             fullRoot = Path.GetFullPath(solutionRoot);
             relative = Path.GetRelativePath(fullRoot, fullFile);
             if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}"))
-                return "솔루션 폴더 밖의 파일입니다";
-            if (ContainsReparsePoint(fullFile, fullRoot)) return "링크를 거친 파일은 공유할 수 없습니다";
+                return "security.outsideSolution";
+            if (ContainsReparsePoint(fullFile, fullRoot)) return "security.linkedFile";
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            return "파일 경로를 확인할 수 없습니다";
+            return "security.invalidPath";
         }
 
         var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Any(BlockedDirectories.Contains)) return "빌드·도구 폴더의 파일입니다";
+        if (segments.Any(BlockedDirectories.Contains)) return "security.blockedDirectory";
 
-        if (IsSecretName(Path.GetFileName(fullFile))) return "비밀이 들어 있을 수 있는 파일입니다";
-        if (content is not null && LooksBinary(content)) return "텍스트 파일이 아닙니다";
+        if (IsSecretName(Path.GetFileName(fullFile))) return "security.secretFile";
+        if (content is not null && LooksBinary(content)) return "security.binaryFile";
 
         return null;
     }
@@ -936,15 +953,15 @@ static class SecurityRules
         if (content.Contains("-----BEGIN PRIVATE KEY-----", Ignore) ||
             content.Contains("-----BEGIN RSA PRIVATE KEY-----", Ignore) ||
             content.Contains("-----BEGIN OPENSSH PRIVATE KEY-----", Ignore))
-            return "개인 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?";
+            return "security.warning.privateKey";
 
         var patterns = new (string Pattern, string Message)[]
         {
-            (@"\bAKIA[0-9A-Z]{16}\b", "AWS 액세스 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
-            (@"\bgh[pousr]_[A-Za-z0-9]{20,}\b", "GitHub 토큰처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
-            (@"\bsk-[A-Za-z0-9_-]{20,}\b", "API 키처럼 보이는 내용이 있습니다. 그래도 공유할까요?"),
+            (@"\bAKIA[0-9A-Z]{16}\b", "security.warning.aws"),
+            (@"\bgh[pousr]_[A-Za-z0-9]{20,}\b", "security.warning.github"),
+            (@"\bsk-[A-Za-z0-9_-]{20,}\b", "security.warning.apiKey"),
             ("(?im)\\b(password|passwd|client_secret|api_key|access_token)\\b\\s*[:=]\\s*['\"][^'\"\\r\\n]{8,}['\"]",
-                "비밀번호나 토큰처럼 보이는 값이 있습니다. 그래도 공유할까요?")
+                "security.warning.password")
         };
 
         try
@@ -956,7 +973,7 @@ static class SecurityRules
         }
         catch (RegexMatchTimeoutException)
         {
-            return "민감 정보 검사를 완료하지 못했습니다. 그래도 공유할까요?";
+            return "security.warning.timeout";
         }
 
         return null;
@@ -1076,7 +1093,7 @@ static class SecurityRules
         Assert(!IsShareable(Path.Combine(root, "Huge.cs"), root, Text(MaxCharacters + 1)), "대용량 파일 차단");
         // 이진 파일을 소스 편집기로 억지로 연 경우.
         Assert(!IsShareable(Path.Combine(root, "logo.png"), root, "\u0089PNG\0\u001a"), "내용이 이진이면 차단");
-        Assert(BlockReason(Path.Combine(root, ".env"), root, Text()) == "비밀이 들어 있을 수 있는 파일입니다",
+        Assert(BlockReason(Path.Combine(root, ".env"), root, Text()) == "security.secretFile",
             "막힌 이유를 알려준다");
         Assert(ContentWarning("const api_key = \"sk-123456789012345678901234\";") is not null,
             "코드 속 API 키 후보 경고");
@@ -1160,7 +1177,7 @@ static class SecurityRules
         var session = new ClassroomSession();
         session.ApplyExtensionUpdate(Sync("class Player {}", 1));
         var waitingHost = session.GetHostSnapshot([]);
-        Assert(waitingHost.VisualStudioStatus.StartsWith("시작 전"),
+        Assert(waitingHost.VisualStudioStatus == "host.vs.before",
             "방송 전 상태를 일시정지라고 표시하지 않는다");
         Assert(waitingHost.CurrentFileDisplayPath == "Solution/Scripts/Player.cs",
             "현재 파일을 솔루션 기준 경로로 표시한다");
@@ -1224,7 +1241,7 @@ static class SecurityRules
         Assert(frozen.Files.Length == 1, "멈춰도 학생 화면은 남는다");
         Assert(frozen.Files[0].Content == "class Player {}", "멈춤 중에는 내용이 갱신되지 않는다");
         Assert(frozen.ProfessorActiveLine == 3, "멈춤 중에는 교수 위치도 움직이지 않는다");
-        Assert(session.GetHostSnapshot([]).VisualStudioStatus.StartsWith("일시정지"),
+        Assert(session.GetHostSnapshot([]).VisualStudioStatus == "host.vs.paused",
             "한 번 시작한 뒤 멈추면 일시정지로 표시한다");
 
         // 멈춘 동안 새 파일만 추가할 수 있다. 기존 파일의 밀린 수정까지 딸려가면 안 된다.
