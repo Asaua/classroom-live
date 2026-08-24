@@ -4,9 +4,12 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
+enum PinValidation { Valid, Invalid, RateLimited }
+
 sealed class ClassroomSession
 {
     internal const int MaxPinAttempts = 10;
+    internal const int MaxEndWaitersPerAddress = 2;
     private static readonly TimeSpan PinAttemptWindow = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan PendingCommandLifetime = TimeSpan.FromSeconds(5);
     /// <summary>주인이 이 시간 동안 조용하면 다른 창이 넘겨받는다. 폴링 간격(0.6초)보다 넉넉히 크게.</summary>
@@ -21,6 +24,7 @@ sealed class ClassroomSession
     // 내용 경고를 교수가 한 번 승인한 파일. 서버를 다시 켜면 승인은 사라진다.
     private readonly HashSet<string> _approvedSensitiveFiles = [];
     private readonly Dictionary<string, (int Count, DateTimeOffset WindowStart)> _pinAttempts = [];
+    private readonly Dictionary<string, int> _endWaiters = [];
     private readonly TaskCompletionSource<bool> _endedSignal =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string? _presetPath;
@@ -86,36 +90,53 @@ sealed class ClassroomSession
     public bool IsExtension(string? token) => CryptographicOperations.FixedTimeEquals(
         Encoding.UTF8.GetBytes(token ?? string.Empty), Encoding.UTF8.GetBytes(ExtensionToken));
 
-    /// <summary>6자리 PIN은 무차별 대입이 쉬우므로 주소별로 실패 횟수를 제한한다.</summary>
-    public bool IsPinRateLimited(string address)
-    {
-        lock (_gate)
-        {
-            if (!_pinAttempts.TryGetValue(address, out var attempt)) return false;
-            if (DateTimeOffset.UtcNow - attempt.WindowStart > PinAttemptWindow)
-            {
-                _pinAttempts.Remove(address);
-                return false;
-            }
-            return attempt.Count >= MaxPinAttempts;
-        }
-    }
-
-    public void RecordPinFailure(string address)
+    /// <summary>PIN 확인과 실패 기록을 한 번에 처리해 동시 요청으로 제한을 우회하지 못하게 한다.</summary>
+    public PinValidation ValidatePin(string address, string? pin)
     {
         lock (_gate)
         {
             var now = DateTimeOffset.UtcNow;
+            if (_pinAttempts.TryGetValue(address, out var attempt) &&
+                now - attempt.WindowStart > PinAttemptWindow)
+            {
+                _pinAttempts.Remove(address);
+                attempt = default;
+            }
+
+            if (attempt.Count >= MaxPinAttempts) return PinValidation.RateLimited;
+            if (IsValidPin(pin))
+            {
+                _pinAttempts.Remove(address);
+                return PinValidation.Valid;
+            }
+
             _pinAttempts[address] =
-                _pinAttempts.TryGetValue(address, out var attempt) && now - attempt.WindowStart <= PinAttemptWindow
+                attempt.Count > 0
                     ? (attempt.Count + 1, attempt.WindowStart)
                     : (1, now);
+            return PinValidation.Invalid;
         }
     }
 
-    public void ClearPinFailures(string address)
+    public bool TryBeginEndWait(string address)
     {
-        lock (_gate) _pinAttempts.Remove(address);
+        lock (_gate)
+        {
+            var count = _endWaiters.GetValueOrDefault(address);
+            if (count >= MaxEndWaitersPerAddress) return false;
+            _endWaiters[address] = count + 1;
+            return true;
+        }
+    }
+
+    public void EndEndWait(string address)
+    {
+        lock (_gate)
+        {
+            if (!_endWaiters.TryGetValue(address, out var count)) return;
+            if (count <= 1) _endWaiters.Remove(address);
+            else _endWaiters[address] = count - 1;
+        }
     }
 
     public bool IsBroadcasting
@@ -1486,12 +1507,25 @@ static class SecurityRules
         fresh.RecordHostPoll();
         Assert(!fresh.IsIdle(TimeSpan.FromMinutes(30)), "교수 화면이 살아 있으면 종료하지 않는다");
 
-        Assert(!session.IsPinRateLimited("1.2.3.4"), "처음에는 제한 없음");
-        for (var i = 0; i < ClassroomSession.MaxPinAttempts; i++) session.RecordPinFailure("1.2.3.4");
-        Assert(session.IsPinRateLimited("1.2.3.4"), "PIN 반복 실패 시 차단");
-        Assert(!session.IsPinRateLimited("5.6.7.8"), "다른 주소는 영향 없음");
-        session.ClearPinFailures("1.2.3.4");
-        Assert(!session.IsPinRateLimited("1.2.3.4"), "성공하면 카운터 초기화");
+        for (var i = 0; i < ClassroomSession.MaxPinAttempts; i++)
+            Assert(session.ValidatePin("1.2.3.4", "000000") == PinValidation.Invalid,
+                "제한 전 PIN 실패를 기록한다");
+        Assert(session.ValidatePin("1.2.3.4", "000000") == PinValidation.RateLimited,
+            "PIN 반복 실패 시 차단");
+        Assert(session.ValidatePin("5.6.7.8", session.Pin) == PinValidation.Valid,
+            "다른 주소는 영향 없음");
+
+        var freshPin = new ClassroomSession();
+        Assert(freshPin.ValidatePin("1.2.3.4", "000000") == PinValidation.Invalid,
+            "잘못된 PIN은 실패한다");
+        Assert(freshPin.ValidatePin("1.2.3.4", freshPin.Pin) == PinValidation.Valid,
+            "올바른 PIN은 성공하고 실패 기록을 지운다");
+
+        Assert(session.TryBeginEndWait("1.2.3.4"), "첫 종료 대기를 허용한다");
+        Assert(session.TryBeginEndWait("1.2.3.4"), "두 번째 종료 대기를 허용한다");
+        Assert(!session.TryBeginEndWait("1.2.3.4"), "주소별 종료 대기 상한을 지킨다");
+        session.EndEndWait("1.2.3.4");
+        Assert(session.TryBeginEndWait("1.2.3.4"), "종료 대기가 닫히면 자리를 반환한다");
     }
 
     private static void Assert(bool condition, string name)

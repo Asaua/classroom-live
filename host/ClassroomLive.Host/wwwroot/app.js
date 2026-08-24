@@ -621,6 +621,8 @@
           ? { "X-Admin-Token": adminToken }
           : { "X-Classroom-Pin": listenerPin },
       });
+      // 학생 종료 대기는 서버 자원을 오래 잡지 않도록 60초마다 새로 연결한다.
+      if (response.status === 204) return;
       if (!response.ok) return;
 
       const payload = await response.json();

@@ -87,15 +87,34 @@ app.Use(async (context, next) =>
 // 두어 외부의 큰 요청은 본문을 읽기 전에 끊는다.
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api/extension"))
+    var path = context.Request.Path;
+    var address = context.Connection.RemoteIpAddress;
+    if (path.StartsWithSegments("/api/extension"))
     {
-        var address = context.Connection.RemoteIpAddress;
         var session = context.RequestServices.GetRequiredService<ClassroomSession>();
         if (address is null || !IPAddress.IsLoopback(address) ||
             !session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault()))
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
+        }
+    }
+    else if (path == "/host" || path.StartsWithSegments("/api/host"))
+    {
+        if (address is null || !IPAddress.IsLoopback(address))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (path.StartsWithSegments("/api/host"))
+        {
+            var session = context.RequestServices.GetRequiredService<ClassroomSession>();
+            if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
         }
     }
     await next();
@@ -133,17 +152,8 @@ app.MapGet("/api/locales", (LocaleStore store) => Results.Json(new
 app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
 {
     var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    if (session.IsPinRateLimited(address))
-        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
-
-    var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
-    if (!session.IsValidPin(pin))
-    {
-        session.RecordPinFailure(address);
-        return Results.Unauthorized();
-    }
-
-    session.ClearPinFailures(address);
+    var failure = StudentAuthenticationFailure(context, session, address);
+    if (failure is not null) return failure;
     session.RecordViewer(address);
     return Results.Json(session.GetSnapshot());
 }).RequireRateLimiting("student-state");
@@ -153,29 +163,39 @@ app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
 app.MapGet("/api/end", async (HttpContext context, ClassroomSession session) =>
 {
     var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    if (session.IsPinRateLimited(address))
+    var failure = StudentAuthenticationFailure(context, session, address);
+    if (failure is not null) return failure;
+    if (!session.TryBeginEndWait(address))
         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
 
-    var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
-    if (!session.IsValidPin(pin))
+    try
     {
-        session.RecordPinFailure(address);
-        return Results.Unauthorized();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        try
+        {
+            await session.WaitForEndAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            return Results.NoContent();
+        }
+        return Results.Json(session.GetSnapshot());
     }
-
-    session.ClearPinFailures(address);
-    await session.WaitForEndAsync(context.RequestAborted);
-    return Results.Json(session.GetSnapshot());
+    finally
+    {
+        session.EndEndWait(address);
+    }
 }).RequireRateLimiting("student-state");
 
 app.MapPost("/api/viewer/leave", (HttpContext context, ClassroomSession session) =>
 {
-    var pin = context.Request.Headers["X-Classroom-Pin"].FirstOrDefault();
-    if (!session.IsValidPin(pin)) return Results.Unauthorized();
-
-    session.RemoveViewer(context.Connection.RemoteIpAddress?.ToString());
+    var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var failure = StudentAuthenticationFailure(context, session, address);
+    if (failure is not null) return failure;
+    session.RemoveViewer(address);
     return Results.Ok();
-});
+}).RequireRateLimiting("student-state");
 
 app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
 {
@@ -506,6 +526,14 @@ static bool IsLocalExtension(HttpContext context, ClassroomSession session)
     return address is not null && IPAddress.IsLoopback(address) &&
            session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault());
 }
+
+static IResult? StudentAuthenticationFailure(HttpContext context, ClassroomSession session, string address) =>
+    session.ValidatePin(address, context.Request.Headers["X-Classroom-Pin"].FirstOrDefault()) switch
+    {
+        PinValidation.Valid => null,
+        PinValidation.RateLimited => Results.StatusCode(StatusCodes.Status429TooManyRequests),
+        _ => Results.Unauthorized()
+    };
 
 record BroadcastRequest(bool Enabled);
 record RestoreRequest(bool Enabled);
