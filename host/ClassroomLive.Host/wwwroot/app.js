@@ -1129,20 +1129,26 @@ while with yield None True False
 
   function fileTreeRows(project) {
     const root = { folders: new Map(), files: [] };
+    // Visual Studio와 Windows는 파일 경로의 대소문자를 구분하지 않는다. 편집기가
+    // 같은 폴더를 Src/src처럼 다른 표기로 보내도 트리에 중복 노드가 생기지 않게 한다.
+    const pathKey = (value) => String(value).toLocaleLowerCase("en-US");
     for (const file of project.files) {
       const parts = String(file.path || file.name).replaceAll("\\", "/").split("/").filter(Boolean);
       parts.pop();
       // 솔루션 루트와 프로젝트 폴더 사이에 src 같은 중간 폴더가 있어도
       // 프로젝트 제목 아래에 같은 프로젝트명이 폴더로 다시 나타나지 않게 한다.
-      const projectRoot = parts.findIndex((part) =>
-        part.localeCompare(project.name, undefined, { sensitivity: "accent" }) === 0);
+      const projectRoot = parts.findIndex((part) => pathKey(part) === pathKey(project.name));
       if (!project.loose && projectRoot >= 0) parts.splice(0, projectRoot + 1);
       let node = root;
       parts.forEach((name, index) => {
-        if (!node.folders.has(name)) node.folders.set(name, {
-          name, path: parts.slice(0, index + 1).join("/"), folders: new Map(), files: []
+        const normalizedName = pathKey(name);
+        if (!node.folders.has(normalizedName)) node.folders.set(normalizedName, {
+          name,
+          path: parts.slice(0, index + 1).join("/"),
+          keyPath: parts.slice(0, index + 1).map(pathKey).join("/"),
+          folders: new Map(), files: []
         });
-        node = node.folders.get(name);
+        node = node.folders.get(normalizedName);
       });
       node.files.push(file);
     }
@@ -1159,7 +1165,7 @@ while with yield None True False
         for (const child of sortedFolders(folder.folders)) appendFolder(child, depth);
         return;
       }
-      const key = `${project.id}:${folder.path.toLocaleLowerCase()}`;
+      const key = `${project.id}:${folder.keyPath}`;
       rows.push({ type: "folder", key, name: folder.name, path: folder.path, depth });
       if (collapsedFolders.has(key)) return;
       for (const file of sortedFiles(folder.files)) rows.push({ type: "file", file, depth: depth + 1 });

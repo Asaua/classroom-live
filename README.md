@@ -146,7 +146,7 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 
 ## Languages
 
-Version 1.3.3 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
+Version 1.3.4 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
 
 On first launch, the instructor language defaults to the Visual Studio language and can later be changed from the instructor view. That selection is also applied to the Visual Studio commands. Students begin with the instructor's default language but can change it independently in their browsers.
 

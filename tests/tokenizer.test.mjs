@@ -16,7 +16,7 @@ const appSource = readFileSync(
 const keywordsBlock = appSource.match(
   /const KEYWORDS = new Set\(`[\s\S]*?`\.trim\(\)\.split\(\/\\s\+\/\)\);/,
 );
-const tokenizeBlock = appSource.match(/function tokenize\(text, insideBlock[\s\S]*?\n  \}\n/);
+const tokenizeBlock = appSource.match(/function tokenize\(text, insideBlock[\s\S]*?\r?\n  \}\r?\n/);
 assert.ok(keywordsBlock, "app.js에서 KEYWORDS 블록을 찾지 못했습니다.");
 assert.ok(tokenizeBlock, "app.js에서 tokenize 블록을 찾지 못했습니다.");
 
