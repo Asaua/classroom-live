@@ -6,6 +6,20 @@
 
 인터넷을 거치지 않습니다. 같은 와이파이 안에서만 동작합니다.
 
+## 화면 미리보기
+
+### Visual Studio 툴바
+
+![Visual Studio에서 Classroom Live를 제어하는 툴바](docs/images/visual-studio-toolbar.png)
+
+### 교수 화면
+
+![공유 파일과 수업 상태를 관리하는 Classroom Live 교수 화면](docs/images/host-view-desktop.png)
+
+### 학생 화면
+
+![공유된 코드를 읽고 원하는 파일을 선택하는 Classroom Live 학생 화면](docs/images/student-view-desktop.png)
+
 ## 지원 환경
 
 - Windows 11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
