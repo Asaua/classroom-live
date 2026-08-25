@@ -12,15 +12,15 @@
 
 ### Visual Studio 툴바
 
-![Visual Studio에서 Classroom Live를 제어하는 툴바](docs/images/visual-studio-toolbar.png)
+![Visual Studio에서 Classroom Live를 제어하는 툴바](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/visual-studio-toolbar.png)
 
 ### 교수 화면
 
-![공유 파일과 수업 상태를 관리하는 Classroom Live 교수 화면](docs/images/host-view-desktop.png)
+![공유 파일과 수업 상태를 관리하는 Classroom Live 교수 화면](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/host-view-desktop.png)
 
 ### 학생 화면
 
-![공유된 코드를 읽고 원하는 파일을 선택하는 Classroom Live 학생 화면](docs/images/student-view-desktop.png)
+![공유된 코드를 읽고 원하는 파일을 선택하는 Classroom Live 학생 화면](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/student-view-desktop.png)
 
 ## 지원 환경
 

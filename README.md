@@ -10,15 +10,15 @@ No Internet connection is involved. Everything stays on the same Wi-Fi network.
 
 ### Visual Studio toolbar
 
-![Control Classroom Live from its Visual Studio toolbar](docs/images/visual-studio-toolbar.png)
+![Control Classroom Live from its Visual Studio toolbar](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/visual-studio-toolbar.png)
 
 ### Instructor view
 
-![Manage shared files and the classroom session from the Classroom Live instructor view](docs/images/host-view-desktop.png)
+![Manage shared files and the classroom session from the Classroom Live instructor view](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/host-view-desktop.png)
 
 ### Student view
 
-![Read shared code and choose a file from the Classroom Live student view](docs/images/student-view-desktop.png)
+![Read shared code and choose a file from the Classroom Live student view](https://raw.githubusercontent.com/Asaua/classroom-live/main/docs/images/student-view-desktop.png)
 
 ## Supported environments
 
