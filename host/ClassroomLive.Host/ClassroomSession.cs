@@ -420,6 +420,7 @@ sealed class ClassroomSession
                 _files[id] = existing with
                 {
                     Content = content,
+                    Revision = existing.Revision + 1,
                     UpdatedAt = now,
                     Pending = false,
                     Missing = false,
@@ -435,7 +436,7 @@ sealed class ClassroomSession
         else
         {
             _files[id] = new SharedFile(id, Path.GetFileName(normalizedPath), relativePath,
-                SecurityRules.LanguageFor(normalizedPath), now, content, Hidden: false,
+                SecurityRules.LanguageFor(normalizedPath), now, content, Revision: 1, Hidden: false,
                 workspaceId, string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
                 projectId, projectName, projectRoot, projectKey, projectFilePath,
                 normalizedPath, normalizedRoot, Pending: false, Missing: false);
@@ -602,7 +603,18 @@ sealed class ClassroomSession
         {
             PruneViewers();
             // 시작 전 준비 목록과 아직 내용을 다시 못 읽은 파일은 학생에게 보내지 않는다.
-            return Snapshot(file => _everStarted && !file.Hidden && !file.Pending && !file.Missing);
+            return Snapshot(file => _everStarted && !file.Hidden && !file.Pending && !file.Missing,
+                includeAllContent: true);
+        }
+    }
+
+    public ClassroomSnapshot GetClientSnapshot(string? contentFileId, long? knownRevision)
+    {
+        lock (_gate)
+        {
+            PruneViewers();
+            return Snapshot(file => _everStarted && !file.Hidden && !file.Pending && !file.Missing,
+                includeAllContent: false, contentFileId, knownRevision);
         }
     }
 
@@ -610,22 +622,37 @@ sealed class ClassroomSession
     {
         lock (_gate)
         {
-            PruneViewers();
-            var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
-            // 교수 화면은 숨긴 파일까지 봐야 되돌릴 수 있다.
-            return new HostSnapshot(Snapshot(_ => true), _broadcasting, _everStarted, connected,
-                connected ? _visualStudioStatus : "host.vs.waiting",
-                connected ? _visualStudioStatusArgument : null,
-                connected ? _currentFileName : null,
-                connected ? _currentFileDisplayPath : null,
-                connected && _currentFileShareable,
-                connected ? _currentFileBlockReason : null,
-                connected && CurrentFileIsShared(),
-                connected && CurrentFileIsHidden(),
-                !_everStarted && !_restoreDecisionMade && _savedPreset.Length > 0,
-                _savedPreset.Length,
-                Pin, studentUrls);
+            return HostSnapshot(studentUrls, includeAllContent: true, null, null);
         }
+    }
+
+    public HostSnapshot GetHostClientSnapshot(string[] studentUrls, string? contentFileId, long? knownRevision)
+    {
+        lock (_gate)
+        {
+            return HostSnapshot(studentUrls, includeAllContent: false, contentFileId, knownRevision);
+        }
+    }
+
+    private HostSnapshot HostSnapshot(string[] studentUrls, bool includeAllContent,
+        string? contentFileId, long? knownRevision)
+    {
+        PruneViewers();
+        var connected = DateTimeOffset.UtcNow - _lastExtensionHeartbeat < TimeSpan.FromSeconds(3);
+        // 교수 화면은 숨긴 파일까지 봐야 되돌릴 수 있다.
+        return new HostSnapshot(Snapshot(_ => true, includeAllContent, contentFileId, knownRevision),
+            _broadcasting, _everStarted, connected,
+            connected ? _visualStudioStatus : "host.vs.waiting",
+            connected ? _visualStudioStatusArgument : null,
+            connected ? _currentFileName : null,
+            connected ? _currentFileDisplayPath : null,
+            connected && _currentFileShareable,
+            connected ? _currentFileBlockReason : null,
+            connected && CurrentFileIsShared(),
+            connected && CurrentFileIsHidden(),
+            !_everStarted && !_restoreDecisionMade && _savedPreset.Length > 0,
+            _savedPreset.Length,
+            Pin, studentUrls);
     }
 
     private SharedFile? PreparedFile(PresetEntry entry)
@@ -641,7 +668,7 @@ sealed class ClassroomSession
             var projectRoot = ProjectRootPath(root, entry.ProjectFilePath);
             return new SharedFile(FileId(fullPath), Path.GetFileName(fullPath),
                 Path.GetRelativePath(root, fullPath).Replace('\\', '/'), SecurityRules.LanguageFor(fullPath),
-                DateTimeOffset.Now, "", entry.Hidden, workspaceId,
+                DateTimeOffset.Now, "", 0, entry.Hidden, workspaceId,
                 string.IsNullOrWhiteSpace(workspaceName) ? "프로젝트" : workspaceName,
                 ProjectId(workspaceId, projectKey, projectName), projectName, projectRoot, projectKey,
                 entry.ProjectFilePath,
@@ -695,19 +722,28 @@ sealed class ClassroomSession
         catch { return false; }
     }
 
-    private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include)
+    private ClassroomSnapshot Snapshot(Func<SharedFile, bool> include, bool includeAllContent,
+        string? contentFileId = null, long? knownRevision = null)
     {
         // 경로 기준 안정 정렬. 최근 수정순으로 두면 교수가 타이핑하는 파일이
         // 학생 커서 밑에서 계속 맨 위로 튄다.
-        var files = _files.Values.Where(include)
+        var sharedFiles = _files.Values.Where(include)
             .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray();
         var activeIsVisible = _professorActiveId is not null &&
-            files.Any(file => file.Id == _professorActiveId);
+            sharedFiles.Any(file => file.Id == _professorActiveId);
         var workspaceIsVisible = _professorWorkspaceId is not null &&
-            files.Any(file => file.WorkspaceId == _professorWorkspaceId);
+            sharedFiles.Any(file => file.WorkspaceId == _professorWorkspaceId);
         var projectIsVisible = _professorProjectId is not null &&
-            files.Any(file => file.ProjectId == _professorProjectId);
+            sharedFiles.Any(file => file.ProjectId == _professorProjectId);
         var professorAway = _professorActiveName is not null && !activeIsVisible;
+        var files = sharedFiles.Select(file => new SharedFileSnapshot(
+            file.Id, file.Name, file.Path, file.Language, file.UpdatedAt, file.Revision,
+            includeAllContent ||
+            (string.Equals(file.Id, contentFileId, StringComparison.Ordinal) && knownRevision != file.Revision)
+                ? file.Content
+                : null,
+            file.Hidden, file.WorkspaceId, file.WorkspaceName, file.ProjectId, file.ProjectName,
+            file.ProjectRoot, file.Pending, file.Missing)).ToArray();
 
         return new ClassroomSnapshot(
             "수업 중",
@@ -870,6 +906,7 @@ sealed record SharedFile(
     string Language,
     DateTimeOffset UpdatedAt,
     string Content,
+    long Revision,
     bool Hidden,
     string WorkspaceId,
     string WorkspaceName,
@@ -880,6 +917,23 @@ sealed record SharedFile(
     [property: JsonIgnore] string? ProjectFilePath,
     [property: JsonIgnore] string FullPath,
     [property: JsonIgnore] string SolutionRoot,
+    bool Pending,
+    bool Missing);
+
+sealed record SharedFileSnapshot(
+    string Id,
+    string Name,
+    string Path,
+    string Language,
+    DateTimeOffset UpdatedAt,
+    long Revision,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Content,
+    bool Hidden,
+    string WorkspaceId,
+    string WorkspaceName,
+    string? ProjectId,
+    string? ProjectName,
+    string? ProjectRoot,
     bool Pending,
     bool Missing);
 
@@ -896,7 +950,7 @@ sealed record ClassroomSnapshot(
     bool Broadcasting,
     bool EverStarted,
     bool Ended,
-    SharedFile[] Files,
+    SharedFileSnapshot[] Files,
     string Language);
 
 sealed record HostSnapshot(
@@ -1298,6 +1352,26 @@ static class SecurityRules
         Assert(live.Files[0].ProjectName == "Assembly-CSharp" &&
                live.ProfessorProjectId == live.Files[0].ProjectId,
             "Visual Studio 프로젝트와 교수 위치를 함께 표시한다");
+
+        var compactSession = new ClassroomSession();
+        compactSession.SetBroadcasting(true);
+        compactSession.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+            "share", file, root, "class Compact {}", 1));
+        var metadataOnly = compactSession.GetClientSnapshot(null, null);
+        Assert(metadataOnly.Files.Single().Content is null &&
+               !JsonSerializer.Serialize(metadataOnly).Contains("\"Content\"", StringComparison.Ordinal),
+            "상태 폴링에는 파일 원문을 넣지 않는다");
+        var compactId = metadataOnly.Files.Single().Id;
+        var withContent = compactSession.GetClientSnapshot(compactId, null).Files.Single();
+        Assert(withContent.Content == "class Compact {}", "선택 파일 원문만 처음 전달한다");
+        Assert(compactSession.GetClientSnapshot(compactId, withContent.Revision).Files.Single().Content is null,
+            "같은 revision의 원문은 다시 전달하지 않는다");
+        compactSession.ApplyExtensionUpdate(new ExtensionUpdateRequest(
+            "sync", file, root, "class Compact { int value; }", 2));
+        var changedContent = compactSession.GetClientSnapshot(compactId, withContent.Revision).Files.Single();
+        Assert(changedContent.Revision > withContent.Revision && changedContent.Content!.Contains("value"),
+            "선택 파일이 바뀌면 새 revision과 원문을 전달한다");
+
         var renamedProject = new ClassroomSession();
         renamedProject.SetBroadcasting(true);
         renamedProject.ApplyExtensionUpdate(new ExtensionUpdateRequest(
@@ -1395,12 +1469,12 @@ static class SecurityRules
         session.ApplyExtensionUpdate(new ExtensionUpdateRequest(
             "refresh", file, root, "class Player { void Update() {} }", 99));
         var refreshed = session.GetSnapshot();
-        Assert(refreshed.Files.Single(item => item.Name == "Player.cs").Content.Contains("Update"),
+        Assert(refreshed.Files.Single(item => item.Name == "Player.cs").Content!.Contains("Update"),
             "재개하면 비활성 공유 파일도 갱신된다");
         Assert(refreshed.ProfessorActiveLine == 3,
             "비활성 파일 갱신은 교수 포인터를 움직이지 않는다");
         session.ApplyExtensionUpdate(Sync("class Player { void Update() {} }", 7));
-        Assert(session.GetSnapshot().Files.Single(item => item.Name == "Player.cs").Content.Contains("Update"),
+        Assert(session.GetSnapshot().Files.Single(item => item.Name == "Player.cs").Content!.Contains("Update"),
             "재개하면 다시 갱신된다");
         Assert(session.GetSnapshot().ProfessorActiveLine == 7, "재개하면 교수 위치도 따라온다");
 
@@ -1483,7 +1557,7 @@ static class SecurityRules
 
         // 주인 창의 폴링은 그대로 반영된다.
         multi.ApplyExtensionUpdate(From("win-1", "sync", fileA, "class A { int x; }"));
-        Assert(multi.GetSnapshot().Files[0].Content.Contains("int x"), "주인 창의 갱신은 반영된다");
+        Assert(multi.GetSnapshot().Files[0].Content!.Contains("int x"), "주인 창의 갱신은 반영된다");
 
         // 교수가 다른 창에서 직접 누르면 주인이 넘어간다.
         multi.ApplyExtensionUpdate(From("win-2", "share", fileB, "class B {}"));

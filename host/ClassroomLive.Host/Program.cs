@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.ResponseCompression;
 
 // 터미널에서 실행됐으면 그 콘솔에 붙는다. 더블클릭이면 창 없이 조용히 시작한다.
 HostConsole.TryAttach();
@@ -47,6 +48,12 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 8 * 1024 * 1024);
 builder.Services.AddSingleton(locales);
 builder.Services.AddSingleton(_ => ClassroomSession.CreatePersistent(locales.Language));
+builder.Services.AddResponseCompression(options =>
+{
+    // 소스 코드는 압축률이 높다. 선택 파일이 바뀐 순간의 JSON 응답도 자동 압축한다.
+    options.EnableForHttps = true;
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(["application/json"]);
+});
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -61,6 +68,7 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
+app.UseResponseCompression();
 
 // 이 앱은 코드와 세션 토큰을 다룬다. 프레임 삽입과 브라우저/프록시 저장을 막는다.
 app.Use(async (context, next) =>
@@ -149,18 +157,20 @@ app.MapGet("/api/locales", (LocaleStore store) => Results.Json(new
     })
 }));
 
-app.MapGet("/api/state", (HttpContext context, ClassroomSession session) =>
+app.MapGet("/api/state", (HttpContext context, ClassroomSession session,
+    string? fileId, long? revision) =>
 {
     var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     var failure = StudentAuthenticationFailure(context, session, address);
     if (failure is not null) return failure;
     session.RecordViewer(address);
-    return Results.Json(session.GetSnapshot());
+    return Results.Json(session.GetClientSnapshot(fileId, revision));
 }).RequireRateLimiting("student-state");
 
 // 백그라운드 탭에서는 setInterval이 크게 늦어질 수 있다. 이 요청을 서버가 잡아 두었다가
 // 정상 종료 순간에 깨워 주면 5초 유예 안에 종료 상태를 확실히 전달할 수 있다.
-app.MapGet("/api/end", async (HttpContext context, ClassroomSession session) =>
+app.MapGet("/api/end", async (HttpContext context, ClassroomSession session,
+    string? fileId, long? revision) =>
 {
     var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     var failure = StudentAuthenticationFailure(context, session, address);
@@ -180,7 +190,7 @@ app.MapGet("/api/end", async (HttpContext context, ClassroomSession session) =>
         {
             return Results.NoContent();
         }
-        return Results.Json(session.GetSnapshot());
+        return Results.Json(session.GetClientSnapshot(fileId, revision));
     }
     finally
     {
@@ -197,22 +207,24 @@ app.MapPost("/api/viewer/leave", (HttpContext context, ClassroomSession session)
     return Results.Ok();
 }).RequireRateLimiting("student-state");
 
-app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session) =>
+app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session,
+    string? fileId, long? revision) =>
 {
     if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
         return Results.Unauthorized();
 
     session.RecordHostPoll();
-    return Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)));
+    return Results.Json(session.GetHostClientSnapshot(GetStudentUrls(port, session.Pin), fileId, revision));
 });
 
-app.MapGet("/api/host/end", async (HttpContext context, ClassroomSession session) =>
+app.MapGet("/api/host/end", async (HttpContext context, ClassroomSession session,
+    string? fileId, long? revision) =>
 {
     if (!session.IsAdmin(context.Request.Headers["X-Admin-Token"].FirstOrDefault()))
         return Results.Unauthorized();
 
     await session.WaitForEndAsync(context.RequestAborted);
-    return Results.Json(session.GetHostSnapshot(GetStudentUrls(port, session.Pin)));
+    return Results.Json(session.GetHostClientSnapshot(GetStudentUrls(port, session.Pin), fileId, revision));
 });
 
 app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest request, ClassroomSession session) =>

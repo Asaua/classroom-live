@@ -24,6 +24,8 @@
   let selectedName = "";
   let latestHostState = null;
   let latestClassroom = null;
+  // 계층 상태에는 원문을 넣지 않는다. 선택한 파일만 revision별로 메모리에 보관한다.
+  const contentCache = new Map();
   const collapsedWorkspaces = loadStringSet("classroom-live:collapsed-workspaces");
   const collapsedProjects = loadStringSet("classroom-live:collapsed-projects");
   const collapsedFolders = loadStringSet("classroom-live:collapsed-folders");
@@ -54,6 +56,7 @@
   // 화면에 그려진 줄. { node, text, startState } 로 줄 단위 비교를 한다.
   let renderedRows = [];
   let renderedFileId = "";
+  let renderedRevision = -1;
   let currentContent = "";
   let noticeTimer = 0;
   let confirmResolve = null;
@@ -571,6 +574,7 @@
     closeFiles();
     dismissNote();
     render(classroom, latestHostState);
+    void refresh();
   }
 
   function scrollToLine(line) {
@@ -589,8 +593,10 @@
     if (Date.now() < blockedUntil) return;
 
     requestRunning = true;
+    const requestedFileId = selectedId;
+    let refreshSelection = false;
     try {
-      const response = await fetch(isHost ? "/api/host/state" : "/api/state", {
+      const response = await fetch(stateUrl(isHost ? "/api/host/state" : "/api/state"), {
         cache: "no-store",
         headers: isHost
           ? { "X-Admin-Token": adminToken }
@@ -613,17 +619,21 @@
       const payload = await response.json();
       latestHostState = isHost ? payload : null;
       const classroom = isHost ? payload.classroom : payload;
+      mergeFileContents(classroom);
       latestClassroom = classroom;
       hostLanguage = classroom.language || payload.language || hostLanguage;
       if (!isHost && !localStorage.getItem(studentLanguageKey) && hostLanguage !== localeCode)
         await loadLocale(hostLanguage);
       $("gate").hidden = true;
       render(classroom, payload);
+      // 첫 접속이나 요청 도중 파일을 바꾼 경우, 다음 0.75초를 기다리지 않는다.
+      refreshSelection = Boolean(selectedId) && selectedId !== requestedFileId;
       void listenForEnd();
     } catch {
       setSessionState("disconnected");
     } finally {
       requestRunning = false;
+      if (refreshSelection && !shuttingDown) void refresh();
     }
   }
 
@@ -633,7 +643,7 @@
     const listenerPin = pin;
     endListenerRunning = true;
     try {
-      const response = await fetch(isHost ? "/api/host/end" : "/api/end", {
+      const response = await fetch(stateUrl(isHost ? "/api/host/end" : "/api/end"), {
         cache: "no-store",
         headers: isHost
           ? { "X-Admin-Token": adminToken }
@@ -646,6 +656,7 @@
       const payload = await response.json();
       const classroom = isHost ? payload.classroom : payload;
       if (!classroom?.ended) return;
+      mergeFileContents(classroom);
       latestHostState = isHost ? payload : null;
       latestClassroom = classroom;
       render(classroom, payload);
@@ -654,6 +665,30 @@
     } finally {
       endListenerRunning = false;
     }
+  }
+
+  function stateUrl(path) {
+    if (!selectedId) return path;
+    const query = new URLSearchParams({ fileId: selectedId });
+    const cached = contentCache.get(selectedId);
+    if (cached) query.set("revision", String(cached.revision));
+    return `${path}?${query}`;
+  }
+
+  function mergeFileContents(classroom) {
+    const files = Array.isArray(classroom?.files) ? classroom.files : [];
+    const visible = new Set(files.map((file) => file.id));
+    for (const file of files) {
+      if (Object.prototype.hasOwnProperty.call(file, "content"))
+        contentCache.set(file.id, { revision: Number(file.revision), content: file.content ?? "" });
+    }
+    for (const id of contentCache.keys())
+      if (!visible.has(id)) contentCache.delete(id);
+  }
+
+  function cachedContent(file) {
+    const cached = file ? contentCache.get(file.id) : null;
+    return cached && cached.revision === Number(file.revision) ? cached.content : null;
   }
 
   function render(classroom, payload) {
@@ -708,7 +743,9 @@
       setTitle($("filePath"), selected.path);
       setText($("fileType"), shortLanguage(selected.language));
       setText($("language"), selected.language);
-      renderCode(selected);
+      const content = cachedContent(selected);
+      if (content === null) clearCode(selected.id);
+      else renderCode({ ...selected, content });
       $("emptyState").hidden = true;
       $("codeScroll").hidden = false;
     } else {
@@ -722,6 +759,7 @@
       $("codeLines").replaceChildren();
       renderedRows = [];
       renderedFileId = "";
+      renderedRevision = -1;
       currentContent = "";
       $("emptyState").hidden = false;
       $("codeScroll").hidden = true;
@@ -776,9 +814,15 @@
   // 학생이 드래그한 선택과 키보드 포커스가 폴링할 때마다 사라진다.
   function renderCode(file) {
     const container = $("codeLines");
+    const revision = Number(file.revision);
+    if (file.id === renderedFileId && revision === renderedRevision) {
+      setText($("lineCount"), plural("file.lines", renderedRows.length));
+      return;
+    }
     const lines = file.content.split("\n");
     const highlighter = highlighterFor(file.language, lines.length);
     currentContent = file.content;
+    renderedRevision = revision;
 
     if (file.id !== renderedFileId) {
       container.replaceChildren();
@@ -805,6 +849,17 @@
 
     while (renderedRows.length > lines.length) renderedRows.pop().node.remove();
     setText($("lineCount"), plural("file.lines", lines.length));
+  }
+
+  function clearCode(fileId) {
+    if (fileId === renderedFileId && currentContent === "" && renderedRows.length === 0) return;
+    $("codeLines").replaceChildren();
+    renderedRows = [];
+    renderedFileId = fileId;
+    renderedRevision = -1;
+    currentContent = "";
+    setText($("lineCount"), plural("file.lines", 0));
+    $("codeScroll").scrollTo({ top: 0, behavior: "auto" });
   }
 
   function createRow() {
