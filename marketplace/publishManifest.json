@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json.schemastore.org/vsix-publish",
+  "categories": [
+    "coding",
+    "other",
+    "team development"
+  ],
+  "identity": {
+    "internalName": "CRL"
+  },
+  "overview": "../README.md",
+  "priceCategory": "free",
+  "publisher": "asau",
+  "private": false,
+  "qna": true,
+  "repo": "https://github.com/Asaua/classroom-live",
+  "assetFiles": [
+    {
+      "pathOnDisk": "../docs/images/visual-studio-toolbar.png",
+      "targetPath": "docs/images/visual-studio-toolbar.png"
+    },
+    {
+      "pathOnDisk": "../docs/images/host-view-desktop.png",
+      "targetPath": "docs/images/host-view-desktop.png"
+    },
+    {
+      "pathOnDisk": "../docs/images/student-view-desktop.png",
+      "targetPath": "docs/images/student-view-desktop.png"
+    }
+  ]
+}

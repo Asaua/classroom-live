@@ -1,234 +1,195 @@
 # Classroom Live
 
-교수님이 Visual Studio에서 보고 있는 코드를 같은 교실의 학생 기기로 바로 띄워주는
-도구입니다. 학생은 받아적는 대신 자기 화면에서 코드를 읽고, 원하는 파일을 직접 골라
-볼 수 있습니다.
+**English** | [한국어](https://github.com/Asaua/classroom-live/blob/main/README.ko.md)
 
-인터넷을 거치지 않습니다. 같은 와이파이 안에서만 동작합니다.
+Classroom Live puts the code an instructor is viewing in Visual Studio directly on student devices in the same classroom. Instead of copying code from a projector, students can read it on their own screens and choose from the files the instructor has shared.
 
-## 화면 미리보기
+No Internet connection is involved. Everything stays on the same Wi-Fi network.
 
-### Visual Studio 툴바
+## Screenshots
 
-![Visual Studio에서 Classroom Live를 제어하는 툴바](docs/images/visual-studio-toolbar.png)
+### Visual Studio toolbar
 
-### 교수 화면
+![Control Classroom Live from its Visual Studio toolbar](docs/images/visual-studio-toolbar.png)
 
-![공유 파일과 수업 상태를 관리하는 Classroom Live 교수 화면](docs/images/host-view-desktop.png)
+### Instructor view
 
-### 학생 화면
+![Manage shared files and the classroom session from the Classroom Live instructor view](docs/images/host-view-desktop.png)
 
-![공유된 코드를 읽고 원하는 파일을 선택하는 Classroom Live 학생 화면](docs/images/student-view-desktop.png)
+### Student view
 
-## 지원 환경
+![Read shared code and choose a file from the Classroom Live student view](docs/images/student-view-desktop.png)
 
-- Windows 11 x64와 데스크톱 Visual Studio 2019, 2022, 2026을 지원합니다.
-- Windows 10 x64에서도 동작할 수 있지만, 일반 소비자용 Windows 10은 운영체제와
-  .NET 10의 공식 지원이 끝났으므로 최선 지원(best effort)으로 제공합니다.
-- macOS, Linux, Windows ARM64, Visual Studio Code는 지원하지 않습니다.
-- 배포용 VSIX에 Windows x64용 호스트 런타임이 포함되므로 교수 PC에 .NET을 따로
-  설치할 필요가 없습니다.
+## Supported environments
 
-## 구성
+- Windows 11 x64 and desktop Visual Studio 2019, 2022, and 2026 are supported.
+- Windows 10 x64 may work, but support is best effort because consumer Windows 10 and .NET 10 are no longer officially supported there.
+- macOS, Linux, Windows ARM64, and Visual Studio Code are not supported.
+- The release VSIX includes the Windows x64 host runtime, so the instructor does not need to install .NET separately.
 
-| 위치 | 역할 |
+## Architecture
+
+| Location | Purpose |
 | --- | --- |
-| `host/ClassroomLive.Host` | 교수 PC에서 실행하는 ASP.NET Core 서버. 상태 보관 + 학생 화면 제공 |
-| `host/ClassroomLive.Host/wwwroot` | 학생·교수 화면 (의존성 없는 정적 HTML/CSS/JS) |
-| `extension/ClassroomLive.Extension` | Visual Studio 확장(VSIX). 현재 편집 중인 파일을 호스트로 보냄 |
+| `host/ClassroomLive.Host` | ASP.NET Core server on the instructor's PC. Stores session state and serves the browser UI |
+| `host/ClassroomLive.Host/wwwroot` | Dependency-free static HTML, CSS, and JavaScript for the instructor and student views |
+| `extension/ClassroomLive.Extension` | Visual Studio extension (VSIX). Sends the active editor file to the host |
 
-동작 흐름:
+Data flow:
 
 ```
-Visual Studio ──(확장)──▶ 127.0.0.1:5050 ──▶ ClassroomLive.exe ──▶ 같은 와이파이의 학생 브라우저
-      ▲                   X-Extension-Token          메모리에만 보관              PIN 필요
-      └──────────────────────────────────┘
-        응답에 실려 오는 공유/해제 명령
-        (교수 화면 버튼 → 확장)
+Visual Studio ──(extension)──▶ 127.0.0.1:5050 ──▶ ClassroomLive.exe ──▶ student browsers on the same Wi-Fi
+      ▲                        X-Extension-Token      in-memory state                 PIN required
+      └──────────────────────────────────────────┘
+             share/unshare commands returned
+             in the host response
 ```
 
-확장이 호스트로 상태를 밀어 올리고, 호스트는 그 **응답에 명령과 현재 상태를 실어**
-돌려보냅니다. 덕분에 교수 화면 버튼만으로도 공유를 켜고 끌 수 있고, Visual Studio
-메뉴도 별도 조회 없이 글자와 활성 여부를 정할 수 있습니다.
+The extension pushes state to the host. The host returns commands and the current session state in the **same response**. This lets the instructor share or unshare files from the browser view while allowing the Visual Studio menu to update its labels and enabled state without separate polling.
 
-Visual Studio의 "실행"은 VSIX에 포함된 `Host\ClassroomLive.exe`를 바로 실행합니다.
-별도 ZIP 압축 해제, 실행 파일 선택, .NET 런타임 설치가 필요하지 않습니다.
+Selecting **Run** in Visual Studio launches `Host\ClassroomLive.exe` directly from the VSIX. No ZIP extraction, executable selection, or separate .NET runtime installation is required.
 
-확장과 호스트는 `%LOCALAPPDATA%\ClassroomLive\host.json`으로 포트와 토큰을 주고받습니다.
-호스트가 실행 중이어야 이 파일이 생기며, 종료하면 지워집니다. 비정상 종료로 파일이
-남아도 확장이 프로세스와 서버 응답을 확인해 오래된 정보는 자동으로 버립니다.
+The extension and host exchange the active port and token through `%LOCALAPPDATA%\ClassroomLive\host.json`. The file exists only while the host is running and is deleted on shutdown. If a crash leaves it behind, the extension checks both the process and server response before discarding stale information.
 
-## 빌드
+## Build
 
-배포용 VSIX는 Visual Studio와 "Visual Studio 확장 개발" 워크로드가 필요합니다.
-`dotnet build`로는 확장이 빌드되지 않습니다.
+Building the release VSIX requires Visual Studio with the **Visual Studio extension development** workload. The extension cannot be built with `dotnet build` alone.
 
 ```powershell
 msbuild extension\ClassroomLive.Extension\ClassroomLive.Extension.csproj /p:Configuration=Release
 ```
 
-산출물: `extension\ClassroomLive.Extension\bin\Release\ClassroomLive.Extension.vsix`
-이 명령이 호스트를 Windows x64 self-contained로 게시해 VSIX의 `Host/`에 자동으로
-포함합니다. 교수에게는 이 VSIX 파일 하나만 전달하면 됩니다.
+Output: `extension\ClassroomLive.Extension\bin\Release\ClassroomLive.Extension.vsix`
 
-호스트만 개발·테스트할 때는 .NET 10 SDK로 따로 실행할 수 있습니다.
+The build publishes the host as a self-contained Windows x64 application and includes it under `Host/` in the VSIX. The instructor only needs the resulting VSIX file.
+
+To develop or test only the host, run it separately with the .NET 10 SDK:
 
 ```bash
 dotnet run --project host/ClassroomLive.Host
 ```
 
-`ClassroomLive.slnx`에는 호스트만 들어 있습니다. 확장을 넣으면 솔루션 단위
-`dotnet build`가 실패하기 때문입니다.
+`ClassroomLive.slnx` contains only the host because adding the extension would make solution-level `dotnet build` fail.
 
-## 실행
+## Running Classroom Live
 
-교수용 사용법은 [`host/ClassroomLive.Host/README.txt`](host/ClassroomLive.Host/README.txt)에
-정리돼 있습니다. 이 파일은 내장 호스트 폴더에도 함께 들어갑니다.
+Instructor instructions are also available in [`host/ClassroomLive.Host/README.txt`](https://github.com/Asaua/classroom-live/blob/main/host/ClassroomLive.Host/README.txt). That file is included with the packaged host.
 
-호스트는 `WinExe`로 빌드됩니다. 더블클릭하면 검은 콘솔 창 없이 브라우저에 교수 화면만
-열립니다. 창을 없앤 대신 콘솔이 하던 세 가지 일을 각각 옮겼습니다.
+The host is built as a `WinExe`. Double-clicking it opens only the instructor view in a browser without showing a console window. The three jobs previously handled by the console have dedicated replacements:
 
-| 콘솔이 하던 일 | 대신하는 것 |
+| Console responsibility | Replacement |
 | --- | --- |
-| 주소 표시 | 브라우저 자동 실행. 실패하면 주소를 담은 안내 창 |
-| 시작 실패 원인 표시 | 오류 창 (`HostConsole.Error`) |
-| Ctrl+C로 종료 | 교수 화면의 "종료" 버튼 |
+| Display the address | Open the browser automatically, or show the address in a dialog if that fails |
+| Report startup failures | Error dialog (`HostConsole.Error`) |
+| Stop with Ctrl+C | **End** button in the instructor view |
 
-터미널에서 실행하면 `AttachConsole`로 부모 콘솔에 붙어 출력이 그대로 보입니다.
-`--self-test`나 CI에서 쓰는 방식은 달라지지 않습니다.
+When started from a terminal, the host uses `AttachConsole` and keeps its normal console output. The behavior of `--self-test` and CI runs is unchanged.
 
-교수 화면을 닫아둔 채 보고 있는 학생도 없으면 30분 뒤 스스로 종료합니다.
-창이 없어 잊기 쉬운 만큼 넣어둔 안전장치입니다.
+If the instructor view is closed and no students remain connected, the host shuts down automatically after 30 minutes.
 
-환경 변수:
+Environment variables:
 
-| 이름 | 기본값 | 설명 |
+| Name | Default | Description |
 | --- | --- | --- |
-| `CLASSROOM_LIVE_PORT` | `5050` | 대기 포트. 확장은 핸드셰이크 파일에서 자동으로 읽습니다 |
-| `CLASSROOM_LIVE_NO_BROWSER` | – | `1`이면 시작할 때 브라우저를 열지 않습니다 |
+| `CLASSROOM_LIVE_PORT` | `5050` | Listening port. The extension discovers it through the handshake file |
+| `CLASSROOM_LIVE_NO_BROWSER` | – | Set to `1` to prevent the browser from opening at startup |
 
-처음 실행할 때 Windows의 네트워크 액세스 알림이 나타나면 **개인 네트워크와 공용
-네트워크를 모두 허용**하세요. 한쪽을 해제해 생긴 차단 규칙은 허용 규칙보다 우선합니다.
-잘못 선택했거나 학생이 접속하지 못하면 교수 화면의 **방화벽 허용**을 다시 눌러 관련
-차단 규칙을 정리하세요. 이 버튼은 사설 IP 대역에서 ClassroomLive.exe의 TCP 포트만
-허용합니다.
+When Windows first asks for network access, allow both **private and public networks**. A blocking rule created by clearing either option takes precedence over an allow rule. If the wrong option was selected or students cannot connect, use **Allow firewall** in the instructor view to remove related blocking rules and recreate a private-IP-only TCP allow rule for ClassroomLive.exe.
 
-학교 와이파이에 AP 격리 또는 클라이언트 격리가 적용된 경우에는 Windows 방화벽을
-허용해도 기기끼리 접속할 수 없습니다.
+Windows Firewall changes cannot bypass AP isolation or client isolation configured on the school Wi-Fi network.
 
-## 교수가 쓰는 두 화면
+## Two instructor control surfaces
 
-교수 화면(브라우저)과 Visual Studio 메뉴는 **같은 일을 할 수 있습니다.**
-어느 쪽을 쓰든 결과는 같고, 다른 쪽에 0.6초 안에 반영됩니다.
+The instructor browser view and the Visual Studio commands provide the **same controls**. Changes made in either surface appear in the other within 0.6 seconds.
 
-Visual Studio 쪽은 **툴바**(`보기 > 도구 모음 > Classroom Live`)와
-`도구 > Classroom Live` 메뉴 양쪽에 같은 명령이 올라갑니다.
+Visual Studio exposes the commands in both the **Classroom Live toolbar** (`View > Toolbars > Classroom Live`) and the `Tools > Classroom Live` menu.
 
 ```
-[ 실행/종료 ] [ 시작/일시정지/재개 ] │ [ 공유 ] [ 숨김 ]
+[ Run/End ] [ Start/Pause/Resume ] │ [ Share ] [ Hide ]
 ```
 
-| 할 일 | 교수 화면 | Visual Studio |
+| Task | Instructor view | Visual Studio |
 | --- | --- | --- |
-| 실행 | – (서버가 떠 있어야 화면이 열림) | 실행 |
-| 종료 | 종료 | 종료 |
-| 시작 / 일시정지 / 재개 | 시작 · 일시정지 · 재개 | 시작 · 일시정지 · 재개 |
-| 현재 파일 공유 / 해제 | `OO.cs 공유` | 공유 |
-| 현재 파일 숨김 / 해제 | 숨김 | 숨김 |
-| 아무 파일이나 숨김 · 공유 해제 | 파일 목록의 `숨김` · `×` | – (현재 파일만) |
+| Run | – (the server must already be running) | Run |
+| End | End | End |
+| Start / pause / resume | Start · Pause · Resume | Start · Pause · Resume |
+| Share / unshare the active file | `Share OO.cs` | Share |
+| Hide / show the active file | Hide | Hide |
+| Hide or unshare any file | `Hide` and `×` in the file list | – (active file only) |
 
-버튼 글자는 상황에 따라 바뀌고, 못 쓰는 버튼은 회색이 됩니다. 패키지는 솔루션이
-없어도 로드되므로 Visual Studio를 막 켠 상태에서도 "실행"을 누를 수 있습니다.
+Button labels change with the session state, and unavailable commands are disabled. The package can load without an open solution, so **Run** remains available immediately after starting Visual Studio.
 
-**공유 해제와 숨김은 다릅니다.** 공유 해제(`×`)는 목록에서 빼서 다시 공유해야 하고,
-숨김은 목록에 둔 채 학생 화면에서만 감춰 언제든 되돌립니다.
+**Unsharing and hiding are different.** Unsharing (`×`) removes a file from the list and requires sharing it again. Hiding keeps it in the list but removes it from the student view until it is shown again.
 
-공유할 수 없는 파일(솔루션 밖, 민감 설정 파일, 100만 자 초과)에서 공유를 누르면
-양쪽 모두 막힌 이유를 알립니다.
+If a file cannot be shared because it is outside the solution, matches a sensitive-file rule, or exceeds one million characters, both control surfaces explain why.
 
-### 단축키
+### Keyboard shortcuts
 
-기본 단축키는 **없습니다.** 필요하면 도구 > 옵션 > 환경 > 키보드에서 직접 지정하세요.
+There are no default shortcuts. Assign them under `Tools > Options > Environment > Keyboard` if needed.
 
-| 명령 | 이름 |
+| Command | Name |
 | --- | --- |
-| 시작 / 일시정지 / 재개 | `ClassroomLive.TogglePause` |
-| 현재 파일 공유 / 해제 | `ClassroomLive.ToggleShare` |
-| 현재 파일 숨김 / 해제 | `ClassroomLive.ToggleHide` |
+| Start / pause / resume | `ClassroomLive.TogglePause` |
+| Share / unshare active file | `ClassroomLive.ToggleShare` |
+| Hide / show active file | `ClassroomLive.ToggleHide` |
 
-실행과 종료는 실수로 누르면 수업이 끊기므로 단축키를 지정할 수 없게 두었습니다.
+Run and End cannot be assigned shortcuts because activating them accidentally would interrupt the class.
 
-## 학생 화면에서 할 수 있는 것
+## Student view features
 
-- 원하는 파일을 직접 골라 봅니다. 교수님이 다른 파일로 옮겨도 내 화면은 그대로입니다.
-- **따라가기**로 교수님이 보고 있는 줄을 계속 따라갑니다. 교수님이 다른 파일로
-  이동하면 `▶▶`를 눌러 그 파일로 이동할 수 있으며 따라가기 상태는 유지됩니다.
-- **복사**로 현재 파일 전체를 클립보드에 담습니다.
-- 코드는 코드박스 안에서 좌우로 스크롤할 수 있습니다.
-- **줄바꿈**으로 긴 줄을 화면 폭에 맞게 접거나 다시 가로 스크롤 방식으로 되돌립니다.
-- **A− / A+**로 글자 크기를 조절합니다. 설정은 다음 접속에도 유지됩니다.
+- Students choose any shared file. Their selected file stays open when the instructor switches to another file.
+- **Follow** tracks the instructor's current line. If the instructor switches files, `▶▶` moves to the new file without disabling Follow.
+- **Copy** places the entire current file on the clipboard.
+- Code can scroll horizontally inside the code panel.
+- **Wrap** switches between wrapping long lines and horizontal scrolling.
+- **A− / A+** changes the font size and remembers the setting for the next visit.
 
-## 언어
+## Languages
 
-1.3.3은 한국어, 영어, 일본어, 중국어(간체), 스페인어, 프랑스어, 독일어,
-브라질 포르투갈어, 러시아어, 힌디어를 포함합니다.
-교수는 첫 실행 때 Visual Studio 언어를 기본값으로 언어를 고르고, 이후 교수 화면의 언어 버튼에서
-바꿀 수 있습니다. 교수 화면에서 바꾼 언어는 Visual Studio 메뉴에도 적용됩니다.
-학생은 교수의 기본 언어로 시작하지만 자기 브라우저에서 독립적으로 변경할 수 있습니다.
+Version 1.3.3 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
 
-번역을 추가하려면 [`locales/en.json`](locales/en.json)을 복사해 값만 번역하세요.
-키와 `{count}` 같은 자리표시자는 유지해야 하며, 카탈로그 검사는 아래 Node.js 테스트에
-포함되어 있습니다.
+On first launch, the instructor language defaults to the Visual Studio language and can later be changed from the instructor view. That selection is also applied to the Visual Studio commands. Students begin with the instructor's default language but can change it independently in their browsers.
 
-## 테스트
+To add a translation, copy [`locales/en.json`](https://github.com/Asaua/classroom-live/blob/main/locales/en.json) and translate only the values. Keep keys and placeholders such as `{count}` unchanged. The Node.js tests include catalog validation.
+
+## Tests
 
 ```bash
-dotnet run --project host/ClassroomLive.Host -- --self-test   # 호스트
-node --test                                                    # 구문 강조 + 언어 카탈로그
+dotnet run --project host/ClassroomLive.Host -- --self-test   # host
+node --test                                                    # syntax highlighting and locale catalogs
 ```
 
-호스트 검사는 공유 보안 규칙, 일시정지 시 갱신 정지, PIN 시도 제한, 내려둔 파일의 409
-응답을 확인합니다. `node --test`는 구문 강조가 코드를 한 글자도 잃지 않는지 확인합니다.
-별도 설치 없이 Node.js만 있으면 됩니다.
+The host self-test covers sharing security rules, update suspension while paused, PIN attempt limiting, and `409` responses for removed files. `node --test` verifies that syntax highlighting never loses a character from the source. Only Node.js is required; there are no additional packages to install.
 
-## 안전장치
+## Safeguards
 
-- **Visual Studio가 텍스트로 열 수 있는 파일이면 무엇이든 공유됩니다.** 확장자 허용
-  목록은 없습니다. `.go`, `.rs`, `Makefile`, `.gitignore`처럼 목록에 없다는 이유로
-  막히던 파일이 이제 전부 열립니다. 무엇이 텍스트인지는 Visual Studio가 이미
-  판단하며, 텍스트로 열리지 않는 파일은 확장이 애초에 보내지 못합니다.
-- 대신 새어 나가면 안 되는 것만 막습니다.
-  - 솔루션 폴더 밖 (경로 탈출 및 심볼릭 링크·정션 우회 포함)
-  - `.git`, `.vs`, `bin`, `obj`, `node_modules`, `packages`, `target`, `.venv`,
-    `.aws`, `.azure`, `.kube`, `.ssh` 등
-  - `.env*`, `appsettings*`, `secrets.json`, `.npmrc`, `.netrc`, `id_rsa*`,
-    `nuget.config`, `launchSettings.json`, `web.config`, `gradle.properties`, `*.tfvars`,
-    `*.user`, `*.pubxml`, 인증서·키(`.pem` `.key` `.pfx` `.p12` `.crt` …)
-  - 내용에 NUL이 있거나 제어문자가 많으면 이진 파일로 보고 막습니다
-    (이진 파일을 소스 편집기로 억지로 연 경우)
-- 일반 코드 안에서 개인 키·비밀번호·API 토큰처럼 보이는 값을 찾으면 자동 차단 대신
-  Visual Studio에서 경고합니다. 교수가 `예`를 눌러야 그 수업 동안 해당 파일을 공유합니다.
-- 막히면 **왜 막혔는지**를 교수 화면과 Visual Studio 양쪽에 그대로 보여줍니다.
-- 파일 1개당 100만 자, 목록 40개까지.
-- 학생은 읽기만 가능합니다. 수정·업로드 경로가 없습니다.
-- **일시정지**는 갱신만 세웁니다. 학생에게는 마지막 화면이 그대로 보입니다.
-  잠깐 감추려면 **숨김**, 목록에서 아예 빼려면 **공유 해제**를 쓰세요.
-- 학생 접속에는 6자리 PIN이 필요하며, 실패가 반복되면 해당 주소를 1분간 차단합니다.
-- 교수 화면과 관리 API는 교수 PC의 브라우저에서만 열 수 있습니다.
-- 확장 → 호스트 요청은 루프백 + 토큰을 모두 만족해야 받습니다.
-- 요청 본문은 8MB로 제한하고, 인증되지 않은 확장 요청은 본문을 읽기 전에 거절합니다.
-- 브라우저 응답에는 저장 방지·프레임 삽입 방지·콘텐츠 형식 보호 헤더를 붙입니다.
+- **Any file Visual Studio can open as text can be shared.** There is no extension allowlist. Files such as `.go`, `.rs`, `Makefile`, and `.gitignore` work without being added to a list. Visual Studio already decides whether a file is text, and the extension cannot send files that the editor cannot open as text.
+- Only files that should never be exposed are blocked:
+  - Files outside the solution directory, including path traversal and symbolic link or junction bypasses
+  - `.git`, `.vs`, `bin`, `obj`, `node_modules`, `packages`, `target`, `.venv`, `.aws`, `.azure`, `.kube`, `.ssh`, and similar directories
+  - `.env*`, `appsettings*`, `secrets.json`, `.npmrc`, `.netrc`, `id_rsa*`, `nuget.config`, `launchSettings.json`, `web.config`, `gradle.properties`, `*.tfvars`, `*.user`, `*.pubxml`, and certificate or key files such as `.pem`, `.key`, `.pfx`, `.p12`, and `.crt`
+  - Content containing NUL characters or an unusual number of control characters is treated as binary and blocked
+- If ordinary source code appears to contain a private key, password, or API token, Visual Studio shows a warning instead of blocking it automatically. The instructor must explicitly approve that file for the current session.
+- When a file is blocked, the instructor view and Visual Studio both display the reason.
+- Each file is limited to one million characters, and each session is limited to 40 files.
+- Students have read-only access. There are no edit or upload endpoints.
+- **Pause** stops updates while leaving the last student view visible. Use **Hide** to remove a file temporarily or **Unshare** to remove it from the list.
+- Student access requires a six-digit PIN. Repeated failures block that network address for one minute.
+- The instructor view and management API are available only from the instructor's own PC.
+- Extension-to-host requests require both loopback access and a valid token.
+- Request bodies are limited to 8 MB, and unauthenticated extension requests are rejected before their bodies are read.
+- Browser responses include headers that prevent caching, framing, and content-type sniffing.
 
-한계도 알아두세요. 통신은 평문 HTTP입니다. 같은 와이파이에서 트래픽을 들여다볼 수 있는
-사람은 공유 중인 코드를 볼 수 있습니다. 민감한 코드는 공유하지 마세요.
+### Network limitation
 
-## 개인정보와 네트워크
+Communication uses plaintext HTTP. Anyone capable of inspecting traffic on the same Wi-Fi network may be able to read the shared code. Do not share passwords, API keys, or other confidential code.
 
-Classroom Live는 텔레메트리를 수집하지 않으며 외부 서버로 코드나 사용 정보를 보내지
-않습니다. 교수 PC의 로컬 서버와 같은 네트워크의 학생 브라우저 사이에서만 통신합니다.
-선택한 언어·글자 크기·줄바꿈 같은 화면 설정은 해당 브라우저에 저장되고, 최근 공유
-목록과 Visual Studio 설정은 교수 PC에 저장됩니다.
+## Privacy and networking
 
-## 라이선스
+Classroom Live does not collect telemetry or send code or usage information to external servers. Communication occurs only between the local server on the instructor's PC and student browsers on the same network.
 
-Classroom Live는 [MIT License](LICENSE.txt)로 배포됩니다.
+UI preferences such as language, font size, and line wrapping are stored in the relevant browser. The recent-sharing list and Visual Studio settings are stored on the instructor's PC.
+
+## License
+
+Classroom Live is distributed under the [MIT License](https://github.com/Asaua/classroom-live/blob/main/LICENSE.txt).
