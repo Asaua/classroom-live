@@ -1031,7 +1031,7 @@ while with yield None True False
       const loose = !file.projectId;
       const id = file.projectId || `${workspace.id}:loose`;
       if (!grouped.has(id)) grouped.set(id, {
-        id, name: file.projectName || t("file.misc"), loose, files: []
+        id, name: file.projectName || t("file.misc"), root: file.projectRoot, loose, files: []
       });
       grouped.get(id).files.push(file);
     }
@@ -1135,10 +1135,17 @@ while with yield None True False
     for (const file of project.files) {
       const parts = String(file.path || file.name).replaceAll("\\", "/").split("/").filter(Boolean);
       parts.pop();
-      // 솔루션 루트와 프로젝트 폴더 사이에 src 같은 중간 폴더가 있어도
-      // 프로젝트 제목 아래에 같은 프로젝트명이 폴더로 다시 나타나지 않게 한다.
-      const projectRoot = parts.findIndex((part) => pathKey(part) === pathKey(project.name));
-      if (!project.loose && projectRoot >= 0) parts.splice(0, projectRoot + 1);
+      const hasRoot = typeof project.root === "string";
+      const rootParts = project.root === "." ? [] :
+        String(project.root || "").replaceAll("\\", "/").split("/").filter(Boolean);
+      const matchesRoot = rootParts.length > 0 && rootParts.every((part, index) =>
+        pathKey(parts[index]) === pathKey(part));
+      if (!project.loose && matchesRoot) parts.splice(0, rootParts.length);
+      else if (!project.loose && !hasRoot) {
+        // 1.3.4 이전 호스트 데이터에는 실제 프로젝트 루트가 없으므로 이름으로 추정한다.
+        const projectRoot = parts.findIndex((part) => pathKey(part) === pathKey(project.name));
+        if (projectRoot >= 0) parts.splice(0, projectRoot + 1);
+      }
       let node = root;
       parts.forEach((name, index) => {
         const normalizedName = pathKey(name);

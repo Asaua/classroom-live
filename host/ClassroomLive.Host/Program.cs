@@ -556,4 +556,6 @@ record ExtensionUpdateRequest(
     /// <summary>Visual Studio가 알려준 프로젝트 표시 이름.</summary>
     string? ProjectName = null,
     /// <summary>같은 솔루션 안에서 프로젝트를 구분하는 Visual Studio 고유 이름.</summary>
-    string? ProjectKey = null);
+    string? ProjectKey = null,
+    /// <summary>Visual Studio가 알려준 프로젝트 파일의 전체 경로.</summary>
+    string? ProjectFilePath = null);

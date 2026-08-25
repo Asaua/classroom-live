@@ -755,6 +755,7 @@ namespace ClassroomLive.Extension
                 update.ProjectKey = string.IsNullOrWhiteSpace(project.UniqueName)
                     ? project.Name
                     : project.UniqueName;
+                update.ProjectFilePath = project.FullName;
             }
             catch
             {
@@ -1074,6 +1075,7 @@ namespace ClassroomLive.Extension
             [DataMember] public string SolutionRoot { get; set; }
             [DataMember] public string ProjectName { get; set; }
             [DataMember] public string ProjectKey { get; set; }
+            [DataMember] public string ProjectFilePath { get; set; }
             [DataMember] public string Content { get; set; }
             [DataMember] public int ActiveLine { get; set; }
             [DataMember] public int AnchorLine { get; set; }

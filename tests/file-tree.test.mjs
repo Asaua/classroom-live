@@ -107,6 +107,38 @@ test("프로젝트 제목과 같은 프로젝트 루트 폴더는 중복 표시�
   ]);
 });
 
+test("F2로 프로젝트 표시 이름을 바꿔도 실제 프로젝트 루트는 중복 표시하지 않는다", () => {
+  const rows = fileTreeRows(project([
+    file("1", "LearnC_Control/Main.C"),
+    file("2", "LearnC_Control/include/Helper.h"),
+  ], { name: "5.LearnC_Control(Visual Studio 2022)", root: "LearnC_Control", loose: false }));
+  assert.deepEqual(describe(rows), [
+    "file:Main.C:0",
+    "folder:include:0:project-1:include",
+    "file:Helper.h:1",
+  ]);
+});
+
+test("실제 프로젝트 루트는 경로의 정확한 접두사일 때만 제거한다", () => {
+  const rows = fileTreeRows(project([
+    file("1", "LearnC_Control_Old/Main.C"),
+  ], { name: "Renamed", root: "LearnC_Control", loose: false }));
+  assert.deepEqual(describe(rows), [
+    "folder:LearnC_Control_Old:0:project-1:learnc_control_old",
+    "file:Main.C:1",
+  ]);
+});
+
+test("프로젝트 파일이 솔루션 루트에 있으면 이름 기반 추정을 사용하지 않는다", () => {
+  const rows = fileTreeRows(project([
+    file("1", "Example/Main.C"),
+  ], { name: "Example", root: ".", loose: false }));
+  assert.deepEqual(describe(rows), [
+    "folder:Example:0:project-1:example",
+    "file:Main.C:1",
+  ]);
+});
+
 test("이름이 같은 폴더도 부모 경로가 다르면 접기 키가 충돌하지 않는다", () => {
   const rows = fileTreeRows(project([
     file("1", "first/common/A.cs"),
