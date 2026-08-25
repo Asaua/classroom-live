@@ -57,12 +57,14 @@ builder.Services.AddResponseCompression(options =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("student-state", context => RateLimitPartition.GetFixedWindowLimiter(
+    options.AddPolicy("student-state", context => RateLimitPartition.GetTokenBucketLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions
+        _ => new TokenBucketRateLimiterOptions
         {
-            PermitLimit = 20,
-            Window = TimeSpan.FromSeconds(10),
+            TokenLimit = 40,
+            TokensPerPeriod = 3,
+            ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+            AutoReplenishment = true,
             QueueLimit = 0
         }));
 });
@@ -539,13 +541,18 @@ static bool IsLocalExtension(HttpContext context, ClassroomSession session)
            session.IsExtension(context.Request.Headers["X-Extension-Token"].FirstOrDefault());
 }
 
-static IResult? StudentAuthenticationFailure(HttpContext context, ClassroomSession session, string address) =>
-    session.ValidatePin(address, context.Request.Headers["X-Classroom-Pin"].FirstOrDefault()) switch
+static IResult? StudentAuthenticationFailure(HttpContext context, ClassroomSession session, string address)
+{
+    var validation = session.ValidatePin(address, context.Request.Headers["X-Classroom-Pin"].FirstOrDefault());
+    if (validation == PinValidation.Valid) return null;
+    if (validation == PinValidation.RateLimited)
     {
-        PinValidation.Valid => null,
-        PinValidation.RateLimited => Results.StatusCode(StatusCodes.Status429TooManyRequests),
-        _ => Results.Unauthorized()
-    };
+        context.Response.Headers["X-Classroom-Pin-Locked"] = "1";
+        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+    }
+
+    return Results.Unauthorized();
+}
 
 record BroadcastRequest(bool Enabled);
 record RestoreRequest(bool Enabled);

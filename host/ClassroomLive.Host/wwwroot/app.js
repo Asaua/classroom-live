@@ -604,9 +604,12 @@
       });
 
       if (!response.ok) {
-        if (!isHost && response.status === 429) {
+        const rateLimit = !isHost ? studentRateLimit(response) : "";
+        if (rateLimit === "pin-locked") {
           blockedUntil = Date.now() + 60_000;
           showGate(t("join.tooMany"));
+        } else if (rateLimit === "retry") {
+          return;
         } else if (!isHost && response.status === 401) {
           pin = "";
           sessionStorage.removeItem("classroom-live:pin");
@@ -635,6 +638,11 @@
       requestRunning = false;
       if (refreshSelection && !shuttingDown) void refresh();
     }
+  }
+
+  function studentRateLimit(response) {
+    if (response.status !== 429) return "";
+    return response.headers.get("X-Classroom-Pin-Locked") === "1" ? "pin-locked" : "retry";
   }
 
   async function listenForEnd() {
