@@ -447,7 +447,7 @@ button, input { font: inherit }
 .notice {
   position: fixed; z-index: 60;
   left: 50%; bottom: 24px;
-  display: flex; align-items: center; gap: 14px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 9px;
   max-width: calc(100vw - 32px);
   padding: 11px 14px;
   transform: translateX(-50%);
@@ -456,16 +456,24 @@ button, input { font: inherit }
   font-size: 12px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, .45);
 }
-.notice-text { min-width: 0 }
-.notice-actions { display: flex; flex: 0 0 auto; gap: 6px }
+.notice-text { min-width: 0; line-height: 1.45 }
+.notice-actions { display: flex; flex-wrap: wrap; gap: 6px }
+.notice.has-actions { width: min(760px, calc(100vw - 32px)) }
+.notice.has-actions .notice-actions {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
 .notice-button {
   min-height: 28px;
-  padding: 0 12px;
+  flex: 1 1 170px;
+  display: grid; gap: 2px; align-content: center;
+  padding: 7px 12px;
   border: 1px solid #3a4450; border-radius: 7px;
   background: #212831; color: #dbe2ea;
   font-size: 12px; font-weight: 650; white-space: nowrap;
   cursor: pointer;
 }
+.notice-button strong { font: inherit }
+.notice-button small { color: #9aa6b3; font-size: 10px; font-weight: 500 }
 .notice-button:hover { border-color: #4a5563; background: #2a323d }
 .notice-button.is-danger { border-color: #7d3340; background: #3a1f26; color: #ffb3bd }
 .notice-button.is-danger:hover { border-color: #a3434f; background: #4a262f; color: #ffd0d6 }
@@ -599,6 +607,7 @@ button, input { font: inherit }
   .host-actions { display: grid; grid-template-columns: 1fr 1fr }
   .host-actions button { min-height: 30px; padding: 0 9px; font-size: 10px }
   .notice { left: 8px; right: 8px; bottom: 12px; max-width: none; transform: none }
+  .notice.has-actions { width: auto }
   .editor-header { min-height: 66px; padding: 11px 12px }
   .file-type { display: none }
   .professor-now { max-width: 42% }

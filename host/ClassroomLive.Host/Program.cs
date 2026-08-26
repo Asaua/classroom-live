@@ -217,7 +217,7 @@ app.MapGet("/api/host/state", (HttpContext context, ClassroomSession session,
         return Results.Unauthorized();
 
     session.RecordHostPoll();
-    return Results.Json(session.GetHostClientSnapshot(GetStudentUrls(port, session.Pin), fileId, revision));
+    return Results.Json(session.GetHostClientSnapshot(GetStudentAddresses(port, session.Pin), fileId, revision));
 });
 
 app.MapGet("/api/host/end", async (HttpContext context, ClassroomSession session,
@@ -227,7 +227,7 @@ app.MapGet("/api/host/end", async (HttpContext context, ClassroomSession session
         return Results.Unauthorized();
 
     await session.WaitForEndAsync(context.RequestAborted);
-    return Results.Json(session.GetHostClientSnapshot(GetStudentUrls(port, session.Pin), fileId, revision));
+    return Results.Json(session.GetHostClientSnapshot(GetStudentAddresses(port, session.Pin), fileId, revision));
 });
 
 app.MapPost("/api/host/broadcast", (HttpContext context, BroadcastRequest request, ClassroomSession session) =>
@@ -404,7 +404,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     var session = app.Services.GetRequiredService<ClassroomSession>();
     var hostUrl = $"http://localhost:{port}/host?token={session.AdminToken}";
-    var studentUrls = GetStudentUrls(port, session.Pin);
+    var studentAddresses = GetStudentAddresses(port, session.Pin);
 
     // 확장이 포트와 토큰을 찾을 수 있도록 남긴다. 이게 없으면 확장은 연결되지 않는다.
     try
@@ -425,7 +425,8 @@ app.Lifetime.ApplicationStarted.Register(() =>
     Console.WriteLine();
     Console.WriteLine("Classroom Live가 준비되었습니다.");
     Console.WriteLine($"교수 화면: {hostUrl}");
-    foreach (var url in studentUrls) Console.WriteLine($"학생 주소: {url}");
+    foreach (var address in studentAddresses)
+        Console.WriteLine($"학생 주소 ({address.Name}): {address.Url}");
     Console.WriteLine();
 
     if (Environment.GetEnvironmentVariable("CLASSROOM_LIVE_NO_BROWSER") == "1") return;
@@ -488,7 +489,7 @@ finally
 
 return 0;
 
-static string[] GetStudentUrls(int port, string pin)
+static StudentAddress[] GetStudentAddresses(int port, string pin)
 {
     var candidates = NetworkInterface.GetAllNetworkInterfaces()
         .Where(network => network.OperationalStatus == OperationalStatus.Up &&
@@ -512,11 +513,14 @@ static string[] GetStudentUrls(int port, string pin)
         // 일반 교실망 주소가 있으면 직접 연결용 169.254 주소보다 먼저 보여준다.
         .ThenBy(item => IsLinkLocalIpv4(item.Address) ? 1 : 0)
         .ThenBy(item => item.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-        .Select(item => $"http://{item.Address}:{port}/?pin={WebUtility.UrlEncode(pin)}")
-        .Distinct()
+        .Select(item => new StudentAddress(item.Name,
+            $"http://{item.Address}:{port}/?pin={WebUtility.UrlEncode(pin)}"))
+        .DistinctBy(item => item.Url)
         .ToArray();
 
-    return addresses.Length > 0 ? addresses : [$"http://localhost:{port}/?pin={pin}"];
+    return addresses.Length > 0
+        ? addresses
+        : [new StudentAddress("Localhost", $"http://localhost:{port}/?pin={pin}")];
 }
 
 static void ScheduleShutdown(ClassroomSession session, IHostApplicationLifetime lifetime)
@@ -596,6 +600,8 @@ static IResult? StudentAuthenticationFailure(HttpContext context, ClassroomSessi
 
     return Results.Unauthorized();
 }
+
+sealed record StudentAddress(string Name, string Url);
 
 record BroadcastRequest(bool Enabled);
 record RestoreRequest(bool Enabled);

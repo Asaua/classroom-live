@@ -100,6 +100,7 @@ Windows Firewall changes cannot bypass AP isolation or client isolation configur
 Classroom Live also lists private IPv4 addresses on gateway-free lab switches and IPv4 link-local
 `169.254.x.x` addresses used by direct Ethernet connections. IPv6-only networks are not supported.
 When a physical Wi-Fi or Ethernet address is available, virtual adapter addresses such as VMware or VPN are hidden.
+When multiple physical addresses remain, the picker shows both the adapter name and IP address.
 
 ## Two instructor control surfaces
 
@@ -151,7 +152,7 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 
 ## Languages
 
-Version 1.4.3 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
+Version 1.4.4 includes Korean, English, Japanese, Simplified Chinese, Traditional Chinese, Spanish, French, German, Brazilian Portuguese, Russian, Hindi, Arabic, Indonesian, Vietnamese, Turkish, and Thai.
 
 On first launch, the instructor language defaults to the Visual Studio language and can later be changed from the instructor view. That selection is also applied to the Visual Studio commands. Students begin with the instructor's default language but can change it independently in their browsers.
 

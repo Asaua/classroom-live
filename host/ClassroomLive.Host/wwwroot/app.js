@@ -272,18 +272,19 @@
     await refresh();
   });
   $("copyLink").addEventListener("click", async () => {
-    const urls = latestHostState?.studentUrls ?? [];
-    if (urls.length === 0) return;
+    const addresses = latestHostState?.studentAddresses ?? [];
+    if (addresses.length === 0) return;
     // 주소가 여러 개면 첫 번째를 말없이 복사하면 안 된다. 가상 어댑터나
     // 다른 네트워크 주소를 학생에게 나눠주면 아무도 못 붙는데 이유를 알 수 없다.
-    if (urls.length > 1) {
-      popup(t("notice.chooseAddress"), urls.map((url) => ({
-        label: hostOf(url),
-        select: () => void copyAndFlash(url),
+    if (addresses.length > 1) {
+      popup(t("notice.chooseAddress"), addresses.map((address) => ({
+        label: address.name,
+        detail: hostOf(address.url),
+        select: () => void copyAndFlash(address.url),
       })));
       return;
     }
-    await copyAndFlash(urls[0]);
+    await copyAndFlash(addresses[0].url);
   });
   $("toggleShare").addEventListener("click", async () => {
     const button = $("toggleShare");
@@ -442,6 +443,7 @@
   function popup(message, actions) {
     const notice = $("notice");
     clearTimeout(noticeTimer);
+    notice.classList.toggle("has-actions", Boolean(actions?.length));
 
     const text = document.createElement("span");
     text.className = "notice-text";
@@ -455,7 +457,14 @@
         const button = document.createElement("button");
         button.type = "button";
         button.className = `notice-button${action.danger ? " is-danger" : ""}`;
-        button.textContent = action.label;
+        const label = document.createElement("strong");
+        label.textContent = action.label;
+        button.append(label);
+        if (action.detail) {
+          const detail = document.createElement("small");
+          detail.textContent = action.detail;
+          button.append(detail);
+        }
         button.addEventListener("click", () => {
           notice.hidden = true;
           action.select?.();

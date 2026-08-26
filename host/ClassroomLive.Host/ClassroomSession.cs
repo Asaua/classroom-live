@@ -618,23 +618,23 @@ sealed class ClassroomSession
         }
     }
 
-    public HostSnapshot GetHostSnapshot(string[] studentUrls)
+    public HostSnapshot GetHostSnapshot(StudentAddress[] studentAddresses)
     {
         lock (_gate)
         {
-            return HostSnapshot(studentUrls, includeAllContent: true, null, null);
+            return HostSnapshot(studentAddresses, includeAllContent: true, null, null);
         }
     }
 
-    public HostSnapshot GetHostClientSnapshot(string[] studentUrls, string? contentFileId, long? knownRevision)
+    public HostSnapshot GetHostClientSnapshot(StudentAddress[] studentAddresses, string? contentFileId, long? knownRevision)
     {
         lock (_gate)
         {
-            return HostSnapshot(studentUrls, includeAllContent: false, contentFileId, knownRevision);
+            return HostSnapshot(studentAddresses, includeAllContent: false, contentFileId, knownRevision);
         }
     }
 
-    private HostSnapshot HostSnapshot(string[] studentUrls, bool includeAllContent,
+    private HostSnapshot HostSnapshot(StudentAddress[] studentAddresses, bool includeAllContent,
         string? contentFileId, long? knownRevision)
     {
         PruneViewers();
@@ -652,7 +652,7 @@ sealed class ClassroomSession
             connected && CurrentFileIsHidden(),
             !_everStarted && !_restoreDecisionMade && _savedPreset.Length > 0,
             _savedPreset.Length,
-            Pin, studentUrls);
+            Pin, studentAddresses);
     }
 
     private SharedFile? PreparedFile(PresetEntry entry)
@@ -972,7 +972,7 @@ sealed record HostSnapshot(
     bool RestoreAvailable,
     int RestoreFileCount,
     string Pin,
-    string[] StudentUrls);
+    StudentAddress[] StudentAddresses);
 
 sealed record PresetEntry(
     string FilePath,
