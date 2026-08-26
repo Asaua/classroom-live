@@ -52,6 +52,12 @@
   let wrapEnabled = localStorage.getItem("classroom-live:wrap") === "1";
   let following = false;
   let followedLine = 0;
+  let followScrollTimer = 0;
+  let selectedLineAnchor = 0;
+  let selectedLineStart = 0;
+  let selectedLineEnd = 0;
+  let lineDragPointer = null;
+  let lineDragLast = 0;
 
   // 화면에 그려진 줄. { node, text, startState } 로 줄 단위 비교를 한다.
   let renderedRows = [];
@@ -231,6 +237,10 @@
   });
   $("followProfessor").addEventListener("click", () => setFollowing(!following));
   $("followFile").addEventListener("click", jumpToProfessorFile);
+  $("codeScroll").addEventListener("scroll", () => {
+    clearTimeout(followScrollTimer);
+    followScrollTimer = setTimeout(stopFollowingOutsideProfessorLine, 120);
+  });
 
   $("toggleBroadcast").addEventListener("click", async () => {
     if (!latestHostState) return;
@@ -560,6 +570,8 @@
     if (latestClassroom)
       applyProfessorLine(latestClassroom,
         latestClassroom.files?.find((file) => file.id === selectedId));
+    // OFF에서 켠 순간만 교수 파일까지 맞춘다. 이후 파일 이동은 ▶▶가 담당한다.
+    if (following) jumpToProfessorFile();
   }
 
   function jumpToProfessorFile() {
@@ -584,6 +596,27 @@
     const target = row.offsetTop - scroller.clientHeight / 3;
     const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     scroller.scrollTo({ top: Math.max(0, target), behavior: smooth ? "smooth" : "auto" });
+  }
+
+  // 스크롤 입력 종류를 추측하지 않는다. 스크롤이 멈춘 뒤 교수 줄이 완전히 사라졌을 때만
+  // 학생이 화면 제어를 가져간 것으로 본다. 코드 선택과 작은 위치 조정은 따라가기를 유지한다.
+  function stopFollowingOutsideProfessorLine() {
+    if (!following || !latestClassroom || latestClassroom.professorAway ||
+        selectedId !== latestClassroom.professorActiveId) return;
+    const line = Number(latestClassroom.professorActiveLine) || 0;
+    const row = renderedRows[line - 1]?.node;
+    if (!row) return;
+
+    const scroller = $("codeScroll");
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    const viewTop = scroller.scrollTop;
+    const viewBottom = viewTop + scroller.clientHeight;
+    if (!overlapsViewport(top, bottom, viewTop, viewBottom)) setFollowing(false);
+  }
+
+  function overlapsViewport(top, bottom, viewTop, viewBottom) {
+    return bottom > viewTop && top < viewBottom;
   }
 
   async function refresh() {
@@ -804,7 +837,7 @@
     const controls = $("followControls");
     const button = $("followProfessor");
     const jump = $("followFile");
-    controls.hidden = classroom.ended || (!canFollow && !following);
+    controls.hidden = classroom.ended;
     jump.disabled = !canJump;
     setTitle(jump, t("follow.jump"));
     jump.setAttribute("aria-label", t("follow.jump"));
@@ -833,6 +866,7 @@
     renderedRevision = revision;
 
     if (file.id !== renderedFileId) {
+      clearStudentLineSelection();
       container.replaceChildren();
       renderedRows = [];
       renderedFileId = file.id;
@@ -856,11 +890,18 @@
     }
 
     while (renderedRows.length > lines.length) renderedRows.pop().node.remove();
+    if (selectedLineAnchor > lines.length) clearStudentLineSelection();
+    else if (selectedLineAnchor) {
+      selectedLineStart = Math.min(selectedLineStart, lines.length);
+      selectedLineEnd = Math.min(selectedLineEnd, lines.length);
+      applyStudentLineSelection();
+    }
     setText($("lineCount"), plural("file.lines", lines.length));
   }
 
   function clearCode(fileId) {
     if (fileId === renderedFileId && currentContent === "" && renderedRows.length === 0) return;
+    clearStudentLineSelection();
     $("codeLines").replaceChildren();
     renderedRows = [];
     renderedFileId = fileId;
@@ -873,17 +914,30 @@
   function createRow() {
     const row = document.createElement("div");
     row.className = "code-line";
-    const number = document.createElement("span");
+    const number = document.createElement("button");
+    number.type = "button";
     number.className = "ln";
-    number.setAttribute("aria-hidden", "true");
+    number.setAttribute("aria-pressed", "false");
+    number.addEventListener("pointerdown", beginStudentLineDrag);
+    number.addEventListener("pointermove", continueStudentLineDrag);
+    number.addEventListener("pointerup", endStudentLineDrag);
+    number.addEventListener("pointercancel", endStudentLineDrag);
+    number.addEventListener("click", (event) => {
+      event.preventDefault();
+      // 포인터 클릭은 pointerdown에서 이미 처리했다. 키보드 클릭만 여기서 받는다.
+      if (event.detail) return;
+      selectStudentLines(Number(row.dataset.line), event.shiftKey);
+    });
     const code = document.createElement("code");
     code.className = "lc";
+    code.addEventListener("pointerdown", clearStudentLineSelection);
     row.append(number, code);
     return row;
   }
 
   function fillRow(row, index, tokens) {
     const [number, code] = row.children;
+    row.dataset.line = String(index + 1);
     setText(number, String(index + 1));
 
     if (tokens.length === 0) {
@@ -907,6 +961,83 @@
       }
     }
     code.replaceChildren(fragment);
+  }
+
+  function lineSelectionRange(anchor, line, extend) {
+    const nextAnchor = extend && anchor ? anchor : line;
+    return {
+      anchor: nextAnchor,
+      start: Math.min(nextAnchor, line),
+      end: Math.max(nextAnchor, line),
+    };
+  }
+
+  function beginStudentLineDrag(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const line = Number(event.currentTarget.parentElement?.dataset.line);
+    if (!renderedRows[line - 1]) return;
+    selectStudentLines(line, event.shiftKey);
+    lineDragPointer = event.pointerId;
+    lineDragLast = line;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function continueStudentLineDrag(event) {
+    if (event.pointerId !== lineDragPointer) return;
+    const gutter = document.elementFromPoint(event.clientX, event.clientY)?.closest(".ln");
+    if (!gutter || !$("codeLines").contains(gutter)) return;
+    const line = Number(gutter.parentElement?.dataset.line);
+    if (line === lineDragLast || !renderedRows[line - 1]) return;
+    lineDragLast = line;
+    selectStudentLines(line, true);
+  }
+
+  function endStudentLineDrag(event) {
+    if (event.pointerId !== lineDragPointer) return;
+    lineDragPointer = null;
+    lineDragLast = 0;
+  }
+
+  function selectStudentLines(line, extend) {
+    if (!renderedRows[line - 1]) return;
+    const range = lineSelectionRange(selectedLineAnchor, line, extend);
+    selectedLineAnchor = range.anchor;
+    selectedLineStart = range.start;
+    selectedLineEnd = range.end;
+    applyStudentLineSelection();
+  }
+
+  function applyStudentLineSelection() {
+    for (let index = 0; index < renderedRows.length; index += 1) {
+      const selected = index + 1 >= selectedLineStart && index + 1 <= selectedLineEnd;
+      const row = renderedRows[index].node;
+      row.classList.toggle("is-student-selection", selected);
+      row.firstElementChild?.setAttribute("aria-pressed", String(selected));
+    }
+
+    const first = renderedRows[selectedLineStart - 1]?.node.lastElementChild;
+    const last = renderedRows[selectedLineEnd - 1]?.node.lastElementChild;
+    if (!first || !last) return;
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.childNodes.length);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  function clearStudentLineSelection() {
+    if (!selectedLineAnchor) return;
+    selectedLineAnchor = 0;
+    selectedLineStart = 0;
+    selectedLineEnd = 0;
+    for (const row of renderedRows) {
+      row.node.classList.remove("is-student-selection");
+      row.node.firstElementChild?.setAttribute("aria-pressed", "false");
+    }
+    const selection = getSelection();
+    if (selection?.anchorNode && $("codeLines").contains(selection.anchorNode)) selection.removeAllRanges();
   }
 
   // --- 구문 강조 -------------------------------------------------------

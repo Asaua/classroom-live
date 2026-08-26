@@ -209,12 +209,15 @@ button, input { font: inherit }
 .ln {
   position: sticky; left: 0; z-index: 1;
   padding-right: 16px;
-  border-right: 1px solid #191e25;
+  border: 0; border-right: 1px solid #191e25;
   background: var(--gutter-bg);
   color: #76818f;
+  font: inherit;
   text-align: right;
-  user-select: none;
+  cursor: pointer; user-select: none;
 }
+.ln:hover { color: #b9c5d3 }
+.ln:focus-visible { outline: 2px solid #6aa9ff; outline-offset: -2px }
 .lc { padding: 0 24px; color: #d8dee8; tab-size: 4; white-space: pre }
 
 .code-lines.is-wrapped { display: block; min-width: 0; width: 100% }
@@ -224,6 +227,11 @@ button, input { font: inherit }
 .code-line.is-professor-selection { background: rgba(184, 245, 65, .04) }
 .code-line.is-professor-line { background: rgba(184, 245, 65, .09) }
 .code-line.is-professor-line .ln { background: rgba(184, 245, 65, .14); color: var(--accent); font-weight: 700 }
+.code-line.is-student-selection { box-shadow: inset 3px 0 #6aa9ff }
+.code-line.is-student-selection .lc { background: rgba(106, 169, 255, .08) }
+/* 실제 Selection은 복사에 남기고, 브라우저 기본 강조는 줄 선택 표시와 겹치지 않게 숨긴다. */
+.code-line.is-student-selection .lc::selection,
+.code-line.is-student-selection .lc *::selection { background: transparent; color: inherit }
 
 .t-comment { color: #8b98a8; font-style: italic }
 .t-string { color: #a5d96a }

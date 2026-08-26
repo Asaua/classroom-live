@@ -138,7 +138,8 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 ## Student view features
 
 - Students choose any shared file. Their selected file stays open when the instructor switches to another file.
-- **Follow** tracks the instructor's current line. If the instructor switches files, `▶▶` moves to the new file without disabling Follow.
+- Turning on **Follow** also opens the instructor's current file. Follow turns off only when the instructor's line leaves the viewport; switching files manually keeps it on, and `▶▶` returns to the instructor's file.
+- Click or drag line numbers to select whole lines. Shift-click extends the selection.
 - **Copy** places the entire current file on the clipboard.
 - Code can scroll horizontally inside the code panel.
 - **Wrap** switches between wrapping long lines and horizontal scrolling.
@@ -146,7 +147,7 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 
 ## Languages
 
-Version 1.4.1 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
+Version 1.4.2 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
 
 On first launch, the instructor language defaults to the Visual Studio language and can later be changed from the instructor view. That selection is also applied to the Visual Studio commands. Students begin with the instructor's default language but can change it independently in their browsers.
 
