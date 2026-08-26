@@ -214,11 +214,15 @@ button, input { font: inherit }
   color: #76818f;
   font: inherit;
   text-align: right;
-  cursor: pointer; user-select: none;
+  cursor: pointer; user-select: none; touch-action: none;
 }
 .ln:hover { color: #b9c5d3 }
 .ln:focus-visible { outline: 2px solid #6aa9ff; outline-offset: -2px }
 .lc { padding: 0 24px; color: #d8dee8; tab-size: 4; white-space: pre }
+/* 교차 영역 두 손가락 선택 중에만 두 번째 터치를 앱이 스크롤로 처리한다. */
+.code-scroll.is-touch-line-selection .lc {
+  touch-action: none; user-select: none; -webkit-touch-callout: none;
+}
 
 .code-lines.is-wrapped { display: block; min-width: 0; width: 100% }
 .code-lines.is-wrapped .code-line { grid-template-columns: var(--gutter) minmax(0, 1fr) }

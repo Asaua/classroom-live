@@ -11,6 +11,7 @@ HostConsole.TryAttach();
 if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
 {
     SecurityRules.SelfTest();
+    StudentAddressRulesSelfTest();
     Console.WriteLine("자체 검사를 통과했습니다.");
     return 0;
 }
@@ -489,18 +490,27 @@ return 0;
 
 static string[] GetStudentUrls(int port, string pin)
 {
-    var addresses = NetworkInterface.GetAllNetworkInterfaces()
+    var candidates = NetworkInterface.GetAllNetworkInterfaces()
         .Where(network => network.OperationalStatus == OperationalStatus.Up &&
-                          network.NetworkInterfaceType is not NetworkInterfaceType.Loopback and not NetworkInterfaceType.Tunnel &&
-                          network.GetIPProperties().GatewayAddresses.Any(gateway =>
-                              gateway.Address.AddressFamily == AddressFamily.InterNetwork &&
-                              !gateway.Address.Equals(IPAddress.Any)))
+                          network.NetworkInterfaceType is not NetworkInterfaceType.Loopback and not NetworkInterfaceType.Tunnel)
         .SelectMany(network => network.GetIPProperties().UnicastAddresses
             .Select(address => new { network.Name, network.Description, address.Address }))
-        .Where(item => item.Address.AddressFamily == AddressFamily.InterNetwork && IsPrivateLan(item.Address))
+        .Where(item => IsStudentAddress(item.Address))
+        .ToArray();
+
+    // 실제 교실망 후보가 있으면 VMware/VPN 주소는 학생에게 보여 주지 않는다.
+    // 실제 어댑터가 전혀 없는 특수 환경에서만 가상 주소를 예비 후보로 남긴다.
+    var physicalCandidates = candidates
+        .Where(item => !IsVirtualAdapter(item.Name) && !IsVirtualAdapter(item.Description))
+        .ToArray();
+    var addresses = candidates
+        .Where(item => ShouldOfferAddress(physicalCandidates.Length > 0,
+            IsVirtualAdapter(item.Name) || IsVirtualAdapter(item.Description)))
         // 교수 PC는 Visual Studio가 깔린 개발 머신이라 Hyper-V, WSL, Docker 같은
         // 가상 어댑터가 흔하다. 그쪽 주소를 학생에게 주면 아무도 못 붙는다.
         .OrderBy(item => IsVirtualAdapter(item.Name) || IsVirtualAdapter(item.Description) ? 1 : 0)
+        // 일반 교실망 주소가 있으면 직접 연결용 169.254 주소보다 먼저 보여준다.
+        .ThenBy(item => IsLinkLocalIpv4(item.Address) ? 1 : 0)
         .ThenBy(item => item.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
         .Select(item => $"http://{item.Address}:{port}/?pin={WebUtility.UrlEncode(pin)}")
         .Distinct()
@@ -523,15 +533,48 @@ static void ScheduleShutdown(ClassroomSession session, IHostApplicationLifetime 
 
 static bool IsVirtualAdapter(string name) =>
     new[] { "vEthernet", "Hyper-V", "VirtualBox", "VMware", "Docker", "WSL",
-            "Tailscale", "ZeroTier", "Radmin", "TAP-", "Npcap", "Loopback" }
+            "Tailscale", "ZeroTier", "Radmin", "TAP-", "Wintun", "WireGuard",
+            "VPN", "Npcap", "Loopback" }
         .Any(marker => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
 
-static bool IsPrivateLan(IPAddress address)
+static bool ShouldOfferAddress(bool hasPhysicalCandidate, bool isVirtualCandidate) =>
+    !hasPhysicalCandidate || !isVirtualCandidate;
+
+static bool IsStudentAddress(IPAddress address)
 {
+    if (address.AddressFamily != AddressFamily.InterNetwork) return false;
     var bytes = address.GetAddressBytes();
     return bytes[0] == 10 ||
            bytes[0] == 192 && bytes[1] == 168 ||
-           bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
+           bytes[0] == 172 && bytes[1] is >= 16 and <= 31 ||
+           IsLinkLocalIpv4(address);
+}
+
+static bool IsLinkLocalIpv4(IPAddress address)
+{
+    if (address.AddressFamily != AddressFamily.InterNetwork) return false;
+    var bytes = address.GetAddressBytes();
+    return bytes[0] == 169 && bytes[1] == 254;
+}
+
+static void StudentAddressRulesSelfTest()
+{
+    static void Assert(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+
+    Assert(IsStudentAddress(IPAddress.Parse("192.168.50.1")), "게이트웨이 없는 사설 IPv4를 허용한다");
+    Assert(IsStudentAddress(IPAddress.Parse("169.254.20.30")), "IPv4 링크 로컬 주소를 허용한다");
+    Assert(!IsStudentAddress(IPAddress.Parse("100.100.20.30")), "Tailscale 주소는 후보에 넣지 않는다");
+    Assert(!IsStudentAddress(IPAddress.Parse("8.8.8.8")), "공인 IPv4를 후보에 넣지 않는다");
+    Assert(!IsStudentAddress(IPAddress.IPv6Loopback), "IPv6는 아직 후보에 넣지 않는다");
+    Assert(IsVirtualAdapter("Tailscale") && IsVirtualAdapter("VMware Network Adapter VMnet8") &&
+           !IsVirtualAdapter("Intel Wi-Fi 7"),
+        "일반적인 가상 어댑터를 실제 Wi-Fi와 구분한다");
+    Assert(!ShouldOfferAddress(true, true) && ShouldOfferAddress(true, false) &&
+           ShouldOfferAddress(false, true),
+        "실제 교실망이 있으면 가상 주소를 숨기고, 없을 때만 예비 후보로 둔다");
 }
 
 static bool IsLocalExtension(HttpContext context, ClassroomSession session)

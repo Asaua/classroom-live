@@ -97,6 +97,9 @@ Environment variables:
 When Windows first asks for network access, allow both **private and public networks**. A blocking rule created by clearing either option takes precedence over an allow rule. If the wrong option was selected or students cannot connect, use **Allow firewall** in the instructor view to remove related blocking rules and recreate a private-IP-only TCP allow rule for ClassroomLive.exe.
 
 Windows Firewall changes cannot bypass AP isolation or client isolation configured on the school Wi-Fi network.
+Classroom Live also lists private IPv4 addresses on gateway-free lab switches and IPv4 link-local
+`169.254.x.x` addresses used by direct Ethernet connections. IPv6-only networks are not supported.
+When a physical Wi-Fi or Ethernet address is available, virtual adapter addresses such as VMware or VPN are hidden.
 
 ## Two instructor control surfaces
 
@@ -140,6 +143,7 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 - Students choose any shared file. Their selected file stays open when the instructor switches to another file.
 - Turning on **Follow** also opens the instructor's current file. Follow turns off only when the instructor's line leaves the viewport; switching files manually keeps it on, and `▶▶` returns to the instructor's file.
 - Click or drag line numbers to select whole lines. Shift-click extends the selection.
+- On touch screens, line-number dragging scrolls automatically near the code-panel edges. Put one finger in the gutter and one in the code area—in either order—to extend the range across repeated swipes with the second finger; edge scrolling continues automatically. Long-pressing the code area before dragging to an edge also extends the line range automatically.
 - **Copy** places the entire current file on the clipboard.
 - Code can scroll horizontally inside the code panel.
 - **Wrap** switches between wrapping long lines and horizontal scrolling.
@@ -147,7 +151,7 @@ Run and End cannot be assigned shortcuts because activating them accidentally wo
 
 ## Languages
 
-Version 1.4.2 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
+Version 1.4.3 includes Korean, English, Japanese, Simplified Chinese, Spanish, French, German, Brazilian Portuguese, Russian, and Hindi.
 
 On first launch, the instructor language defaults to the Visual Studio language and can later be changed from the instructor view. That selection is also applied to the Visual Studio commands. Students begin with the instructor's default language but can change it independently in their browsers.
 

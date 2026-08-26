@@ -56,8 +56,24 @@
   let selectedLineAnchor = 0;
   let selectedLineStart = 0;
   let selectedLineEnd = 0;
+  let paintedLineStart = 0;
+  let paintedLineEnd = 0;
   let lineDragPointer = null;
   let lineDragLast = 0;
+  let lineDragTouch = false;
+  let lineDragGutterX = 0;
+  let lineDragStartY = 0;
+  let lineDragClientY = 0;
+  let lineDragMoved = false;
+  let lineDragAutoFrame = 0;
+  let pendingCodeTouch = null;
+  let lineScrollPointer = null;
+  let lineScrollLastX = 0;
+  let lineScrollLastY = 0;
+  let lineScrollClientY = 0;
+  let lineDragPrimaryRegion = "";
+  let lineDragTouchIdentifier = null;
+  let codeHoldTimer = 0;
 
   // 화면에 그려진 줄. { node, text, startState } 로 줄 단위 비교를 한다.
   let renderedRows = [];
@@ -238,6 +254,10 @@
   $("followProfessor").addEventListener("click", () => setFollowing(!following));
   $("followFile").addEventListener("click", jumpToProfessorFile);
   $("codeScroll").addEventListener("scroll", () => {
+    if (lineDragPointer !== null) {
+      if (lineDragTouch) updateTouchLineSelection();
+      return;
+    }
     clearTimeout(followScrollTimer);
     followScrollTimer = setTimeout(stopFollowingOutsideProfessorLine, 120);
   });
@@ -922,6 +942,7 @@
     number.addEventListener("pointermove", continueStudentLineDrag);
     number.addEventListener("pointerup", endStudentLineDrag);
     number.addEventListener("pointercancel", endStudentLineDrag);
+    number.addEventListener("lostpointercapture", endStudentLineDrag);
     number.addEventListener("click", (event) => {
       event.preventDefault();
       // 포인터 클릭은 pointerdown에서 이미 처리했다. 키보드 클릭만 여기서 받는다.
@@ -930,7 +951,18 @@
     });
     const code = document.createElement("code");
     code.className = "lc";
-    code.addEventListener("pointerdown", clearStudentLineSelection);
+    code.addEventListener("pointerdown", beginCodeTouch);
+    code.addEventListener("pointermove", continueCodeTouch);
+    code.addEventListener("pointerup", endCodeTouch);
+    code.addEventListener("pointercancel", endCodeTouch);
+    code.addEventListener("lostpointercapture", endCodeTouch);
+    code.addEventListener("touchstart", beginCodeHold, { passive: true });
+    code.addEventListener("touchmove", continueCodeHold, { passive: false });
+    code.addEventListener("touchend", endCodeHold);
+    code.addEventListener("touchcancel", endCodeHold);
+    code.addEventListener("contextmenu", (event) => {
+      if (lineDragPrimaryRegion === "code") event.preventDefault();
+    });
     row.append(number, code);
     return row;
   }
@@ -974,17 +1006,60 @@
 
   function beginStudentLineDrag(event) {
     if (event.button !== 0) return;
+    if (lineDragPointer !== null) {
+      // 코드 영역을 홀딩해 기준점을 잡은 뒤 거터에 새 손가락을 대는 경로다.
+      if (event.pointerType === "touch" && lineDragPrimaryRegion === "code") {
+        event.preventDefault();
+        startTouchScroll(event);
+      }
+      return;
+    }
     event.preventDefault();
     const line = Number(event.currentTarget.parentElement?.dataset.line);
     if (!renderedRows[line - 1]) return;
-    selectStudentLines(line, event.shiftKey);
+    clearTimeout(followScrollTimer);
+
+    // 코드 영역을 먼저 누른 뒤 거터에 두 번째 손가락을 댄 경우에도 첫 손가락의
+    // 줄을 기준점으로 삼는다. 두 번째 손가락은 아래 startTouchScroll에서 스크롤한다.
+    if (event.pointerType === "touch" && pendingCodeTouch) {
+      const anchor = pendingCodeTouch;
+      pendingCodeTouch = null;
+      const gutterRect = event.currentTarget.getBoundingClientRect();
+      clearTimeout(codeHoldTimer);
+      codeHoldTimer = 0;
+      lineDragTouchIdentifier = anchor.touchIdentifier;
+      beginTouchLineSelection(anchor.pointerId, anchor.line, anchor.clientY,
+        gutterRect.left + gutterRect.width / 2, "code");
+      startTouchScroll(event);
+      return;
+    }
+
     lineDragPointer = event.pointerId;
     lineDragLast = line;
+    lineDragTouch = event.pointerType === "touch";
+    const gutterRect = event.currentTarget.getBoundingClientRect();
+    lineDragGutterX = gutterRect.left + gutterRect.width / 2;
+    lineDragStartY = event.clientY;
+    lineDragClientY = event.clientY;
+    lineDragPrimaryRegion = lineDragTouch ? "gutter" : "mouse";
+    selectStudentLines(line, event.shiftKey);
+    if (lineDragTouch) $("codeScroll").classList.add("is-touch-line-selection");
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
   function continueStudentLineDrag(event) {
+    if (event.pointerId === lineScrollPointer) {
+      continueTouchScroll(event);
+      return;
+    }
     if (event.pointerId !== lineDragPointer) return;
+    if (lineDragTouch) {
+      lineDragClientY = event.clientY;
+      if (Math.abs(lineDragClientY - lineDragStartY) >= 6) lineDragMoved = true;
+      updateTouchLineSelection();
+      scheduleTouchLineAutoScroll();
+      return;
+    }
     const gutter = document.elementFromPoint(event.clientX, event.clientY)?.closest(".ln");
     if (!gutter || !$("codeLines").contains(gutter)) return;
     const line = Number(gutter.parentElement?.dataset.line);
@@ -994,9 +1069,230 @@
   }
 
   function endStudentLineDrag(event) {
-    if (event.pointerId !== lineDragPointer) return;
+    const action = touchPointerEndAction(event.pointerId, lineDragPointer, lineScrollPointer);
+    if (action === "release-scroll") {
+      stopTouchScroll();
+      return;
+    }
+    if (action === "finish") finishStudentLineDrag();
+  }
+
+  function finishStudentLineDrag() {
+    const commitTouchSelection = lineDragTouch;
+    cancelAnimationFrame(lineDragAutoFrame);
+    $("codeScroll").classList.remove("is-touch-line-selection");
     lineDragPointer = null;
+    lineScrollPointer = null;
     lineDragLast = 0;
+    lineDragTouch = false;
+    lineDragGutterX = 0;
+    lineDragStartY = 0;
+    lineDragClientY = 0;
+    lineDragMoved = false;
+    lineDragAutoFrame = 0;
+    lineScrollLastX = 0;
+    lineScrollLastY = 0;
+    lineScrollClientY = 0;
+    lineDragPrimaryRegion = "";
+    lineDragTouchIdentifier = null;
+    clearTimeout(codeHoldTimer);
+    codeHoldTimer = 0;
+    if (commitTouchSelection && selectedLineAnchor) applyStudentLineSelection();
+  }
+
+  function beginCodeTouch(event) {
+    if (event.pointerType !== "touch") {
+      clearStudentLineSelection();
+      return;
+    }
+
+    const line = Number(event.currentTarget.parentElement?.dataset.line);
+    if (!renderedRows[line - 1]) return;
+
+    // 거터가 이미 기준점을 잡았다면 코드 영역의 손가락은 스크롤 전용이다.
+    if (lineDragTouch && lineDragPointer !== null && lineDragPrimaryRegion === "gutter") {
+      startTouchScroll(event);
+      return;
+    }
+
+    // 평소 한 손가락 코드 스크롤은 브라우저에 맡긴다. 움직이지 않고 반대 영역에
+    // 두 번째 손가락을 댄 경우에만 이 포인터가 줄 선택 기준점으로 승격된다.
+    pendingCodeTouch = {
+      pointerId: event.pointerId,
+      line,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      touchIdentifier: null,
+      target: event.currentTarget,
+    };
+    clearStudentLineSelection();
+  }
+
+  function continueCodeTouch(event) {
+    if (event.pointerId === lineScrollPointer) {
+      continueTouchScroll(event);
+      return;
+    }
+    if (pendingCodeTouch?.pointerId === event.pointerId &&
+        (Math.abs(event.clientX - pendingCodeTouch.clientX) >= 8 ||
+         Math.abs(event.clientY - pendingCodeTouch.clientY) >= 8)) {
+      pendingCodeTouch = null;
+      clearTimeout(codeHoldTimer);
+      codeHoldTimer = 0;
+    }
+  }
+
+  function endCodeTouch(event) {
+    if (pendingCodeTouch?.pointerId === event.pointerId) {
+      pendingCodeTouch = null;
+      clearTimeout(codeHoldTimer);
+      codeHoldTimer = 0;
+    }
+    const action = touchPointerEndAction(event.pointerId, lineDragPointer, lineScrollPointer);
+    if (action === "release-scroll") {
+      stopTouchScroll();
+      return;
+    }
+    if (action === "finish") finishStudentLineDrag();
+  }
+
+  function beginTouchLineSelection(pointerId, line, clientY, gutterX, primaryRegion) {
+    clearTimeout(followScrollTimer);
+    lineDragPointer = pointerId;
+    lineDragLast = line;
+    lineDragTouch = true;
+    lineDragGutterX = gutterX;
+    lineDragStartY = clientY;
+    lineDragClientY = clientY;
+    lineDragPrimaryRegion = primaryRegion;
+    selectStudentLines(line, false);
+    $("codeScroll").classList.add("is-touch-line-selection");
+  }
+
+  function startTouchScroll(event) {
+    if (lineScrollPointer !== null) return;
+    event.preventDefault();
+    lineScrollPointer = event.pointerId;
+    lineScrollLastX = event.clientX;
+    lineScrollLastY = event.clientY;
+    lineScrollClientY = event.clientY;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function stopTouchScroll() {
+    cancelAnimationFrame(lineDragAutoFrame);
+    lineDragAutoFrame = 0;
+    lineScrollPointer = null;
+    lineScrollLastX = 0;
+    lineScrollLastY = 0;
+    lineScrollClientY = 0;
+    lineDragMoved = false;
+  }
+
+  function continueTouchScroll(event) {
+    event.preventDefault();
+    const scroller = $("codeScroll");
+    const deltaX = touchDragScrollDelta(lineScrollLastX, event.clientX);
+    const deltaY = touchDragScrollDelta(lineScrollLastY, event.clientY);
+    lineScrollLastX = event.clientX;
+    lineScrollLastY = event.clientY;
+    lineScrollClientY = event.clientY;
+    if (!deltaX && !deltaY) return;
+    lineDragMoved = true;
+    scroller.scrollLeft += deltaX;
+    scroller.scrollTop += deltaY;
+    updateTouchLineSelection();
+    scheduleTouchLineAutoScroll();
+  }
+
+  function touchDragScrollDelta(previous, current) {
+    return previous - current;
+  }
+
+  function touchPointerEndAction(pointerId, primaryPointer, scrollPointer) {
+    if (pointerId === scrollPointer) return "release-scroll";
+    if (pointerId === primaryPointer) return "finish";
+    return "ignore";
+  }
+
+  function beginCodeHold(event) {
+    if (!pendingCodeTouch || lineDragPointer !== null) return;
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    pendingCodeTouch.touchIdentifier = touch.identifier;
+    clearTimeout(codeHoldTimer);
+    codeHoldTimer = setTimeout(() => {
+      const anchor = pendingCodeTouch;
+      if (!anchor || anchor.touchIdentifier !== touch.identifier || lineDragPointer !== null) return;
+      pendingCodeTouch = null;
+      codeHoldTimer = 0;
+      lineDragTouchIdentifier = anchor.touchIdentifier;
+      const gutter = anchor.target.parentElement?.firstElementChild;
+      const gutterRect = gutter?.getBoundingClientRect();
+      if (!gutterRect) return;
+      beginTouchLineSelection(anchor.pointerId, anchor.line, anchor.clientY,
+        gutterRect.left + gutterRect.width / 2, "code");
+    }, 320);
+  }
+
+  function continueCodeHold(event) {
+    if (lineDragPrimaryRegion !== "code" || lineScrollPointer !== null) return;
+    const touch = Array.from(event.touches)
+      .find((item) => item.identifier === lineDragTouchIdentifier);
+    if (!touch) return;
+    event.preventDefault();
+    lineDragClientY = touch.clientY;
+    if (Math.abs(lineDragClientY - lineDragStartY) >= 6) lineDragMoved = true;
+    updateTouchLineSelection();
+    scheduleTouchLineAutoScroll();
+  }
+
+  function endCodeHold(event) {
+    const ended = Array.from(event.changedTouches)
+      .some((item) => item.identifier === lineDragTouchIdentifier);
+    if (ended && lineDragPrimaryRegion === "code") finishStudentLineDrag();
+  }
+
+  function touchEdgeScrollDelta(position, start, end) {
+    const zone = Math.min(56, (end - start) / 3);
+    if (zone <= 0) return 0;
+    if (position < start + zone)
+      return -Math.ceil(16 * Math.min(1, (start + zone - position) / zone));
+    if (position > end - zone)
+      return Math.ceil(16 * Math.min(1, (position - end + zone) / zone));
+    return 0;
+  }
+
+  function scheduleTouchLineAutoScroll() {
+    if (!lineDragTouch || !lineDragMoved || lineDragAutoFrame) return;
+    lineDragAutoFrame = requestAnimationFrame(autoScrollTouchLineSelection);
+  }
+
+  function autoScrollTouchLineSelection() {
+    lineDragAutoFrame = 0;
+    if (!lineDragTouch || lineDragPointer === null) return;
+    const scroller = $("codeScroll");
+    const rect = scroller.getBoundingClientRect();
+    const edgeY = lineScrollPointer === null ? lineDragClientY : lineScrollClientY;
+    const delta = touchEdgeScrollDelta(edgeY, rect.top, rect.bottom);
+    if (!delta) return;
+    const before = scroller.scrollTop;
+    scroller.scrollTop += delta;
+    if (scroller.scrollTop === before) return;
+    updateTouchLineSelection();
+    lineDragAutoFrame = requestAnimationFrame(autoScrollTouchLineSelection);
+  }
+
+  function updateTouchLineSelection() {
+    if (!lineDragTouch || lineDragPointer === null) return;
+    const rect = $("codeScroll").getBoundingClientRect();
+    const y = Math.max(rect.top + 1, Math.min(rect.bottom - 1, lineDragClientY));
+    const gutter = document.elementFromPoint(lineDragGutterX, y)?.closest(".ln");
+    if (!gutter || !$("codeLines").contains(gutter)) return;
+    const line = Number(gutter.parentElement?.dataset.line);
+    if (line === lineDragLast || !renderedRows[line - 1]) return;
+    lineDragLast = line;
+    selectStudentLines(line, true);
   }
 
   function selectStudentLines(line, extend) {
@@ -1009,13 +1305,16 @@
   }
 
   function applyStudentLineSelection() {
-    for (let index = 0; index < renderedRows.length; index += 1) {
-      const selected = index + 1 >= selectedLineStart && index + 1 <= selectedLineEnd;
-      const row = renderedRows[index].node;
-      row.classList.toggle("is-student-selection", selected);
-      row.firstElementChild?.setAttribute("aria-pressed", String(selected));
-    }
+    for (let line = paintedLineStart; line && line <= paintedLineEnd; line += 1)
+      if (line < selectedLineStart || line > selectedLineEnd) setStudentLineSelected(line, false);
+    for (let line = selectedLineStart; line <= selectedLineEnd; line += 1)
+      if (!paintedLineStart || line < paintedLineStart || line > paintedLineEnd)
+        setStudentLineSelected(line, true);
+    paintedLineStart = selectedLineStart;
+    paintedLineEnd = selectedLineEnd;
 
+    // 터치 드래그 중에는 운영체제의 선택 핸들을 띄우지 않는다. 손을 뗄 때 한 번만 만든다.
+    if (lineDragTouch && lineDragPointer !== null) return;
     const first = renderedRows[selectedLineStart - 1]?.node.lastElementChild;
     const last = renderedRows[selectedLineEnd - 1]?.node.lastElementChild;
     if (!first || !last) return;
@@ -1027,15 +1326,22 @@
     selection?.addRange(range);
   }
 
+  function setStudentLineSelected(line, selected) {
+    const row = renderedRows[line - 1]?.node;
+    if (!row) return;
+    row.classList.toggle("is-student-selection", selected);
+    row.firstElementChild?.setAttribute("aria-pressed", String(selected));
+  }
+
   function clearStudentLineSelection() {
     if (!selectedLineAnchor) return;
     selectedLineAnchor = 0;
     selectedLineStart = 0;
     selectedLineEnd = 0;
-    for (const row of renderedRows) {
-      row.node.classList.remove("is-student-selection");
-      row.node.firstElementChild?.setAttribute("aria-pressed", "false");
-    }
+    for (let line = paintedLineStart; line <= paintedLineEnd; line += 1)
+      setStudentLineSelected(line, false);
+    paintedLineStart = 0;
+    paintedLineEnd = 0;
     const selection = getSelection();
     if (selection?.anchorNode && $("codeLines").contains(selection.anchorNode)) selection.removeAllRanges();
   }
